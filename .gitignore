@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# ML model weights (too large for git — store separately)
+models/*.pt
+models/*.pth
+models/*.onnx
+models/*.bin
+models/*.safetensors
+
+# Large test images
+test_data/*.tif
+test_data/*.tiff
+test_data/*.png
+test_data/*.jpg
+test_data/*.jpeg
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.local
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Output files (generated, not source)
+outputs/
+*.dxf
+*.3dm
+*.zip
+
+# Redis / Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Logs
+*.log
+logs/
