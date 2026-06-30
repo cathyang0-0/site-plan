@@ -100,8 +100,11 @@ Road width estimated from the mask's medial axis thickness → used to offset ce
 3. Dead-end pruning (remove stubs shorter than 3 m)
 4. **Graph path tracing:** traverse each connected path from endpoint to endpoint (or junction to junction), collecting ordered point sequences — this ensures each continuous visual segment becomes one curve, not many segments
 5. Per-path cubic B-spline fitting (`scipy.interpolate.splprep`) — produces smooth NURBS, not piecewise polylines
-6. Intersection closure: snap curve endpoints within 1 m tolerance
-7. Output: list of `shapely.geometry.LineString` (smooth, sampled from spline at high density for GeoJSON preview; exported as SPLINE entity in DXF)
+6. **Fillet standardization:** after spline fitting, detect sharp turns where the local curvature radius falls below the fillet threshold. Replace each such turn with a circular arc of the standardized fillet radius, trimming the incoming and outgoing curve segments to meet the arc tangentially. This ensures all corners read at a consistent sharpness regardless of the raw skeleton geometry.
+7. Intersection closure: snap curve endpoints within 1 m tolerance
+8. Output: list of `shapely.geometry.LineString` (smooth, sampled from spline at high density for GeoJSON preview; exported as SPLINE entity in DXF)
+
+**Fillet radius:** user-configurable, default **3 m**. A single global value applies to all roads. Sharp turns with a detected radius already above this threshold are left unchanged. Recommended values by road type: footpath ~1–2 m, driveway ~3–5 m, road ~5–10 m. The user sets one value per job; per-road overrides are not supported in v1.
 
 **Layer name:** `ROADS`
 
@@ -147,32 +150,80 @@ Alternative if DeepForest performs poorly on the target imagery style: SAM2 Auto
 
 ### 4e. Roof Ridge Lines
 
-**Goal:** Detect the ridge line (peak line of a pitched roof) within each building footprint. Flat roofs produce no ridge line. Output is one or more line segments per pitched roof, sitting on top of the white roof fill.
+**Goal:** Detect ridge lines within each building footprint. Ridge lines must form a valid **tree structure** inside the roof polygon and must snap to align parallel or perpendicular to the roof edges.
 
-**Approach:**
-Ridge lines are visible in aerial imagery as linear intensity transitions (one slope lit, the other in shadow) running along the dominant axis of the roof. Two complementary methods are used and their results merged:
+#### Topological constraint — tree structure
 
-1. **Medial axis fallback (always runs):** compute the medial axis of the building polygon — for a simple rectangular building this produces a centerline that approximates the ridge. Trim to the interior of the polygon. Works well for gabled roofs on rectangular buildings.
+Ridge lines within a single roof are modeled as a tree graph:
 
-2. **Edge detection refinement (runs if confidence is low):** within each building bounding box, run Canny edge detection on the grayscale aerial image. Filter detected edges to those that are (a) roughly parallel to the building's dominant axis and (b) within the building polygon. Fit a line through the strongest edge cluster. This captures the actual ridge position more accurately than the medial axis on non-rectangular buildings.
+- **Leaf nodes:** endpoints that touch (snap onto) the roof outline perimeter
+- **Internal nodes:** points where two or more ridge lines meet each other
+- **Edges:** the ridge line segments connecting nodes
 
-**Post-processing:**
-- Clip all ridge line candidates to the building polygon (slightly inset by ~0.3 m to avoid touching the perimeter)
-- Fit a cubic B-spline to the ridge point sequence for smooth output
-- Minimum ridge length: 2 m (suppress on very small buildings)
-- Output: one `LineString` per building that has a detectable ridge
+Rules enforced after detection:
+1. Every ridge segment must be connected to the tree — no floating lines
+2. Every leaf endpoint must lie on the roof perimeter (snapped within 0.5 m tolerance)
+3. No cycles — the graph must be acyclic (a true tree, not a loop)
+4. Minimum segment length: 2 m (suppress tiny stubs)
 
-**Confidence scoring:** if the two methods disagree by more than 1 m, flag the building as "uncertain" — the ridge line is still output but on a sub-layer `RIDGELINES_UNCERTAIN` that the user can review and delete manually in CAD.
+Any detected candidate that cannot satisfy these rules is discarded. If no valid tree can be formed, the building is treated as flat-roof (no ridge output).
+
+```
+Example — gabled roof:
+  Perimeter ─────────────────
+             \              /
+              \___ridge____/   ← one segment, both ends touch perimeter
+  Perimeter ─────────────────
+
+Example — L-shaped roof:
+  ┌──────────┐
+  │  ridge A │─────────────── perimeter
+  └──┬───────┘
+     │ ridge B   ← B's top end meets A (internal node)
+     └──────     ← B's bottom end touches perimeter (leaf)
+```
+
+#### Geometric constraint — parallel/perpendicular snapping
+
+1. Compute the **dominant axis**: the angle of the longest edge of the building's minimum rotated bounding rectangle
+2. For each ridge segment, measure its angular deviation from parallel (0°) and perpendicular (90°) to the dominant axis
+3. **Snap rule:** if deviation from parallel or perpendicular is ≤20°, rotate the segment to exactly 0° or 90° (keeping midpoint fixed). If deviation falls between 20°–70° from both, leave as-is (intentional diagonal, e.g. hip roof)
+
+```
+Ridge angle vs. dominant axis:
+  0° – 20°  → snap to parallel
+  70° – 90° → snap to perpendicular
+  20° – 70° → leave as detected (hip/diagonal)
+```
+
+After snapping, leaf endpoints are re-projected onto the perimeter and internal node positions are recomputed to maintain the tree structure.
+
+#### Detection approach
+
+1. **Medial axis (always runs):** skeleton of the building polygon — good approximation for rectangular and L-shaped buildings
+2. **Canny edge refinement:** detect strong linear edges inside the building bounding box, filter to those inside the polygon and aligned near the dominant axis, fit a line to the strongest cluster
+3. Merge results: prefer edge-detected position when confidence is high, fall back to medial axis
+4. Apply tree topology enforcement and angle snapping
+5. Output: list of `LineString` per roof forming a valid tree
+
+**Confidence scoring:** if the two methods disagree by >1 m, flag the building — ridge lines still output on `RIDGELINES_UNCERTAIN` for user review.
 
 **Layer name:** `RIDGELINES` (certain) / `RIDGELINES_UNCERTAIN` (review needed)
 
 ### 4f. Contours (optional, v2)
 
 Source: Copernicus DEM (30m, free globally) or USGS 3DEP (10m, US only).  
-Processing: DEM fetch → reproject → Gaussian smooth → contour extraction → clip to site boundary.  
+Processing: DEM fetch → reproject → Gaussian smooth → contour extraction → clip to site boundary.
+
+**Curve continuity rule:** each **topologically connected segment** at a given elevation must be a single curve entity — either a **closed loop** (contour fully contained within the site) or a single **open curve** (enters and exits the boundary). A single elevation may legitimately produce multiple such entities if the terrain creates disconnected crossings — for example, a ridge that rises above the contour elevation, dips below it, then rises again will produce two separate open curves at that elevation, both of which are correct and must remain separate.
+
+What is never allowed is a single connected contour being broken into fragments. If the raw DEM extraction or boundary clipping produces multiple short fragments that are part of the same continuous crossing (identifiable by proximity and directional continuity), they are joined before export — closest endpoints bridged in sequence until one continuous curve results. Fragments that are genuinely disconnected (separated by terrain that falls below that elevation) are kept as separate curve entities.
+
+In summary: one curve entity per connected contour component, any number of components per elevation.
+
 **Layer name:** `CONTOURS`
 
----
+
 
 ---
 
