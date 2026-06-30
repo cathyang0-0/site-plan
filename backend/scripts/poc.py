@@ -66,18 +66,21 @@ def placeholder_trees(img_w: int, img_h: int, count: int = 30) -> list[dict]:
     return trees
 
 
-def simple_circle_block(radius_px: float = 20.0, n_pts: int = 32) -> list[list]:
+def default_tree_block(radius_px: float = 20.0, n_pts: int = 32) -> list[list]:
     """
-    A single tree block made of one circle (Style B from spec).
-    Returns a list of curve point-lists (one curve = the circle).
+    Default tree block: circle with a "+" in the center.
+    Returns a list of curve point-lists: [circle_pts, horizontal_line, vertical_line].
     """
     import math
-    pts = [
+    circle = [
         (radius_px * math.cos(2 * math.pi * i / n_pts),
          radius_px * math.sin(2 * math.pi * i / n_pts))
         for i in range(n_pts + 1)
     ]
-    return [pts]
+    arm = radius_px * 0.3  # "+" arms are 30% of radius
+    horizontal = [(-arm, 0), (arm, 0)]
+    vertical   = [(0, -arm), (0, arm)]
+    return [circle, horizontal, vertical]
 
 
 def main():
@@ -103,7 +106,7 @@ def main():
     buildings = placeholder_buildings(img_w, img_h)
     roads = placeholder_roads(img_w, img_h)
     tree_placements = placeholder_trees(img_w, img_h)
-    tree_blocks = [simple_circle_block()]
+    tree_blocks = [default_tree_block()]
 
     style = {
         "roofs": {"color": "#000000"},

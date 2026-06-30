@@ -53,29 +53,50 @@ def detect_trees(image: Image.Image, scale_m_per_px: float) -> list[dict]:
     return detections
 
 
-def filter_against_buildings(
+def filter_placements(
     detections: list[dict],
     building_polygons: list[Polygon],
-    scale_m_per_px: float,
     overlap_threshold: float = 0.30,
 ) -> list[dict]:
     """
-    Remove trees whose canopy overlaps a building footprint by more than
-    overlap_threshold (fraction of canopy area).
+    Filter tree detections by two overlap rules:
+      1. Tree-building overlap > threshold → suppress
+      2. Tree-tree overlap > threshold → suppress (checked against already-accepted trees)
 
-    Trees with <=30% overlap are kept — they will be visually masked by
-    the roof's white fill in the drawing.
+    Both rules use STRtree spatial indexing to keep complexity at O(n log n)
+    rather than O(n²). The bounding-box query narrows candidates; precise
+    intersection is only computed for nearby shapes.
     """
-    filtered = []
+    from shapely.strtree import STRtree
+
+    building_index = STRtree(building_polygons) if building_polygons else None
+
+    accepted: list[dict] = []
+    accepted_canopies: list[Polygon] = []
+
     for det in detections:
         canopy = Point(det["x_px"], det["y_px"]).buffer(det["radius_px"])
-        max_overlap = 0.0
-        for building in building_polygons:
-            intersection_area = canopy.intersection(building).area
-            overlap_ratio = intersection_area / canopy.area
-            max_overlap = max(max_overlap, overlap_ratio)
 
-        if max_overlap <= overlap_threshold:
-            filtered.append(det)
+        # Rule 1: building overlap
+        if building_index is not None:
+            candidates = building_index.query(canopy)
+            if any(
+                canopy.intersection(building_polygons[i]).area / canopy.area > overlap_threshold
+                for i in candidates
+            ):
+                continue
 
-    return filtered
+        # Rule 2: tree-tree overlap against already-accepted canopies
+        if accepted_canopies:
+            tree_index = STRtree(accepted_canopies)
+            candidates = tree_index.query(canopy)
+            if any(
+                canopy.intersection(accepted_canopies[i]).area / canopy.area > overlap_threshold
+                for i in candidates
+            ):
+                continue
+
+        accepted.append(det)
+        accepted_canopies.append(canopy)
+
+    return accepted
