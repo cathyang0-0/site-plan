@@ -37,10 +37,24 @@ class LandTypeStyle(LayerStyle):
 
 
 class StyleConfig(BaseModel):
-    roofs: RoofStyle = RoofStyle()
-    roads: LayerStyle = LayerStyle(line_weight_mm=0.18)
-    trees: LayerStyle = LayerStyle(line_weight_mm=0.13)
-    land_types: List[LandTypeStyle] = []  # one per detected cluster
+    site_boundary: LayerStyle = LayerStyle(color="#000000", line_weight_mm=0.35)
+    roofs: RoofStyle = RoofStyle(color="#1a1a1a", line_weight_mm=0.25)
+    ridge_lines: LayerStyle = LayerStyle(color="#444444", line_weight_mm=0.10)
+    ridge_lines_uncertain: LayerStyle = LayerStyle(color="#aaaaaa", line_weight_mm=0.05)
+    roads: LayerStyle = LayerStyle(color="#333333", line_weight_mm=0.18)
+    trees: LayerStyle = LayerStyle(color="#555555", line_weight_mm=0.10)
+    contours: LayerStyle = LayerStyle(color="#999999", line_weight_mm=0.05)
+    land_types: List[LandTypeStyle] = [
+        # defaults match detected cluster order: water, vegetation, bare earth, paved
+        LandTypeStyle(color="#aaaaaa", line_weight_mm=0.05, hatch_type="lines",
+                      hatch_color="#888888", hatch_angle_deg=0.0,  hatch_spacing_mm=2.0),
+        LandTypeStyle(color="#aaaaaa", line_weight_mm=0.05, hatch_type="dots",
+                      hatch_color="#777777", hatch_angle_deg=0.0,  hatch_spacing_mm=1.5),
+        LandTypeStyle(color="#aaaaaa", line_weight_mm=0.05, hatch_type="lines",
+                      hatch_color="#888888", hatch_angle_deg=45.0, hatch_spacing_mm=3.0),
+        LandTypeStyle(color="#aaaaaa", line_weight_mm=0.05, hatch_type="crosshatch",
+                      hatch_color="#666666", hatch_angle_deg=45.0, hatch_spacing_mm=2.5),
+    ]
 
 
 class JobRequest(BaseModel):

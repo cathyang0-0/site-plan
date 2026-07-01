@@ -227,20 +227,41 @@ In summary: one curve entity per connected contour component, any number of comp
 
 ---
 
-## 5. Layer Schema & Drawing Order
+## 5. Layer Schema, Drawing Order & Default Styles
 
 Drawing order determines visual stacking. Lower index = drawn first (bottom).
 
-| Order | Layer                  | Geometry                    | Notes                                                   |
-| ----- | ---------------------- | --------------------------- | ------------------------------------------------------- |
-| 1     | `CONTOURS`             | Spline curve                | Bottommost — sits under everything                      |
-| 2     | `LANDTYPE_*`           | Filled region + spline edge | Ground cover regions; boundaries are smooth curves      |
-| 3     | `ROADS`                | Spline curve                | Continuous curves; connected segments = one entity      |
-| 4     | `TREES`                | Block instance              | Trees over roads                                        |
-| 5     | `ROOFS`                | Closed polygon + white fill | White fill masks everything below                       |
-| 6     | `RIDGELINES`           | Spline curve                | Detected pitch ridge lines; drawn over roof fill        |
-| 6b    | `RIDGELINES_UNCERTAIN` | Spline curve                | Low-confidence ridges for user review; deletable in CAD |
-| 7     | `SITE_BOUNDARY`        | Closed polygon              | Optional site perimeter                                 |
+All defaults assume **print on white background**. Colors are RGB hex. Lineweights follow the architectural convention in the lineweight chart (0.05 / 0.1 / 0.18 / 0.25 / 0.35 mm range). Hatch lines are always 0.05 mm.
+
+| Order | Layer                  | Geometry                    | Default LW | Default Color | Linetype | Notes |
+| ----- | ---------------------- | --------------------------- | ---------- | ------------- | -------- | ----- |
+| 1     | `CONTOURS`             | Spline curve                | 0.05 mm    | #999999       | Solid    | Very light — recedes behind everything |
+| 2     | `LANDTYPE_*` boundary  | Spline curve                | 0.05 mm    | #aaaaaa       | Solid    | Subtle land edge |
+| 2     | `LANDTYPE_*` hatch     | Hatch fill                  | 0.05 mm    | #666666       | Solid    | Medium-dark gray; spacing varies by type |
+| 3     | `ROADS`                | Spline curve                | 0.18 mm    | #333333       | Solid    | Readable but not dominant |
+| 4     | `TREES`                | Block instance              | 0.10 mm    | #555555       | Solid    | Light — trees are texture, not structure |
+| 5     | `ROOFS` fill           | White solid hatch           | —          | #ffffff       | —        | Always white; masks layers below |
+| 5     | `ROOFS` outline        | Closed spline               | 0.25 mm    | #1a1a1a       | Solid    | Heaviest line on the drawing — buildings read clearly |
+| 6     | `RIDGELINES`           | Spline curve                | 0.10 mm    | #444444       | Solid    | Lighter than roof outline |
+| 6b    | `RIDGELINES_UNCERTAIN` | Spline curve                | 0.05 mm    | #aaaaaa       | Dashed   | Visually quiet — for review only |
+| 7     | `SITE_BOUNDARY`        | Closed polygon              | 0.35 mm    | #000000       | Solid    | Heaviest element; frames the drawing |
+
+### Rationale
+
+The hierarchy reads: site boundary > roof outlines > roads > ridge lines = trees > land type hatches = contours. This matches the reference drawing — buildings are the dominant readable element, everything else recedes.
+
+**Roof outline at 0.25 mm** is intentionally the heaviest interior element (matching "main furniture" weight from the chart), since in a context plan buildings are the primary objects. Roads at 0.18 mm read clearly but don't compete. Trees and ridge lines at 0.10 mm are detail-level. Contours and land hatches at 0.05 mm are pure texture.
+
+### Default hatch styles per land type
+
+| Land type         | Pattern        | Spacing  | Angle | Color   |
+| ----------------- | -------------- | -------- | ----- | ------- |
+| Water             | Parallel lines | 2.0 mm   | 0°    | #888888 |
+| Vegetation / grass| Dots           | 1.5 mm   | —     | #777777 |
+| Bare earth / farmland | Parallel lines | 3.0 mm | 45°  | #888888 |
+| Paved / hardscape | Cross-hatch    | 2.5 mm   | 45°  | #666666 |
+
+All hatch lineweight: **0.05 mm**. All hatch colors: medium to dark gray (#666666–#888888). Users can override per layer in the style panel.
 
 The white solid fill on `ROOFS` is the key: it is a filled white polygon drawn between layer 4 and the roof perimeter curve, so trees and roads that pass under a building are visually hidden without being deleted.
 
