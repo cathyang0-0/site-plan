@@ -10,6 +10,9 @@ import numpy as np
 from PIL import Image
 from shapely.geometry import Point, Polygon
 
+MIN_CANOPY_RADIUS_M = 1.5   # canopies smaller than this are enlarged, not dropped
+MAX_CANOPY_RADIUS_M = 10.0  # canopies larger than this are discarded (likely mis-detections)
+
 
 def detect_trees(image: Image.Image, scale_m_per_px: float) -> list[dict]:
     """
@@ -39,9 +42,15 @@ def detect_trees(image: Image.Image, scale_m_per_px: float) -> list[dict]:
         radius_px = (row["xmax"] - row["xmin"]) / 2   # use width as diameter estimate
         radius_m = radius_px * scale_m_per_px
 
-        # Filter: canopy radius must be between 1m and 10m
-        if radius_m < 1.0 or radius_m > 10.0:
+        # Discard implausibly large detections (likely mis-detections), but
+        # enlarge implausibly small ones to a minimum readable canopy size
+        # rather than dropping them -- a real tree that's under-detected in
+        # size shouldn't just vanish from the drawing.
+        if radius_m > MAX_CANOPY_RADIUS_M:
             continue
+        if radius_m < MIN_CANOPY_RADIUS_M:
+            radius_m = MIN_CANOPY_RADIUS_M
+            radius_px = radius_m / scale_m_per_px
 
         detections.append({
             "x_px": x_center,

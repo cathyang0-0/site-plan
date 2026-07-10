@@ -5,23 +5,54 @@ Layer drawing order (bottom to top):
   CONTOURS → LANDTYPE_* → ROADS → TREES → ROOFS (white fill) → ROOFS (outline)
 
 All coordinates are in meters, local origin at site bounding box center.
+
+Roads with a defined width are drawn as the boundary of their merged,
+filleted pavement corridor (see _build_road_network) rather than as
+independent per-road offset edges — this makes intersections and
+fillets a natural side effect of a single polygon boolean, instead of
+needing explicit graph-based junction detection.
 """
 import random
 import ezdxf
 from ezdxf import colors
 from ezdxf.enums import TextEntityAlignment
+from ezdxf.lldxf.const import VALID_DXF_LINEWEIGHTS
 from shapely.geometry import Polygon, MultiPolygon, LineString, MultiLineString
+from shapely.ops import unary_union
 from pathlib import Path
 
-
-# DXF lineweight values (hundredths of mm)
-LW = {
-    0.13: 13,
-    0.18: 18,
-    0.25: 25,
-    0.35: 35,
-    0.50: 50,
+# Default lineweights (mm) per layer, matching spec.md §5's architectural
+# hierarchy: site boundary > roof outlines > roads > ridge lines/trees >
+# land hatches. Used when the caller's style dict doesn't override a value.
+DEFAULT_LINE_WEIGHT_MM = {
+    "ROOFS": 0.40,
+    "ROADS": 0.18,
+    "TREES": 0.10,
+    "LANDTYPE": 0.05,
 }
+
+# spec.md §4b default fillet radius, applied at road/road intersections.
+DEFAULT_FILLET_RADIUS_M = 3.0
+
+# $SORTENTS (header var 280) bitcode -- which operations respect the explicit
+# SORTENTSTABLE redraw order instead of raw entity/handle order:
+#   1 = object selection, 2 = object snap, 16 = REGEN, 32 = plotting/printing
+# (4, 8, 64 are obsolete legacy bits and are intentionally left unset)
+SORTENTS_SELECTION = 1
+SORTENTS_SNAP = 2
+SORTENTS_REGEN = 16
+SORTENTS_PLOTTING = 32
+SORTENTS_ALL = SORTENTS_SELECTION | SORTENTS_SNAP | SORTENTS_REGEN | SORTENTS_PLOTTING
+
+
+def _nearest_dxf_lineweight(mm: float) -> int:
+    """Snap an arbitrary mm value to the nearest DXF-valid lineweight code
+    (hundredths of a mm). DXF only accepts a fixed enum of lineweights
+    (see ezdxf.lldxf.const.VALID_DXF_LINEWEIGHTS) -- arbitrary values are
+    rejected, so every style mm value must be snapped to this set."""
+    hundredths = mm * 100
+    valid = [v for v in VALID_DXF_LINEWEIGHTS if v >= 0]
+    return min(valid, key=lambda v: abs(v - hundredths))
 
 
 def export_dxf(
@@ -61,6 +92,15 @@ def export_dxf(
     def poly_pts(polygon):
         return [px_to_m(pt) for pt in polygon.exterior.coords]
 
+    def poly_rings(polygon):
+        """(exterior_pts, [hole_pts, ...]) -- a polygon's interior rings
+        matter whenever it's been clipped against a building that sits
+        fully inside it (not touching its outer edge): the building only
+        shows up as a hole, not a bite out of the exterior boundary."""
+        exterior = [px_to_m(pt) for pt in polygon.exterior.coords]
+        holes = [[px_to_m(pt) for pt in ring.coords] for ring in polygon.interiors]
+        return exterior, holes
+
     # --- Define tree blocks ---
     block_names = []
     for i, curves in enumerate(tree_block_curves):
@@ -72,25 +112,102 @@ def export_dxf(
         block_names.append(block_name)
 
     # --- Layers ---
-    _add_layer(doc, "LANDTYPE", style.get("land_types", [{}])[0].get("color", "#aaaaaa"), 13)
-    _add_layer(doc, "ROADS", style.get("roads", {}).get("color", "#333333"), 18)
-    _add_layer(doc, "TREES", style.get("trees", {}).get("color", "#333333"), 13)
-    _add_layer(doc, "ROOFS_FILL", "#ffffff", 0)
-    _add_layer(doc, "ROOFS", style.get("roofs", {}).get("color", "#000000"), 25)
+    # Each layer's lineweight comes from the caller's style dict when
+    # provided, falling back to the spec.md §5 architectural defaults.
+    landtype_style = style.get("land_types", [{}])[0] if style.get("land_types") else {}
+    _add_layer(
+        doc, "LANDTYPE",
+        landtype_style.get("color", "#aaaaaa"),
+        landtype_style.get("line_weight_mm", DEFAULT_LINE_WEIGHT_MM["LANDTYPE"]),
+    )
+    _add_layer(
+        doc, "ROADS",
+        style.get("roads", {}).get("color", "#333333"),
+        style.get("roads", {}).get("line_weight_mm", DEFAULT_LINE_WEIGHT_MM["ROADS"]),
+    )
+    _add_layer(
+        doc, "TREES",
+        style.get("trees", {}).get("color", "#333333"),
+        style.get("trees", {}).get("line_weight_mm", DEFAULT_LINE_WEIGHT_MM["TREES"]),
+    )
+    _add_layer(doc, "ROOFS_FILL", "#ffffff", 0.0, aci=255)  # true white, never swaps with background
+    _add_layer(
+        doc, "ROOFS",
+        style.get("roofs", {}).get("color", "#000000"),
+        style.get("roofs", {}).get("line_weight_mm", DEFAULT_LINE_WEIGHT_MM["ROOFS"]),
+    )
+
+    # Roof-fill "masking" (relying on CAD draw order/SORTENTSTABLE to paint
+    # the white roof fill over anything underneath) has proven unreliable
+    # across viewers and plot modes. Instead, actually remove the parts of
+    # roads and land-type regions that fall under a building footprint
+    # before drawing them, so there's no overlap left for any viewer to
+    # get wrong. Trees are intentionally left to draw order — a tree
+    # canopy is allowed up to 30% overlap with a building by design
+    # (filter_placements), and clipping a block INSERT isn't meaningful.
+    buildings_union = unary_union(buildings) if buildings else None
+    buildings_union = (
+        buildings_union if buildings_union is not None and not buildings_union.is_empty else None
+    )
+
+    # Roads with a defined width are merged into a single pavement corridor
+    # polygon per connected network, with concave (inside) corners at
+    # intersections rounded into fillets -- see _build_road_network for why
+    # this replaces drawing each road's offset edges independently. Computed
+    # up front (before land types) so land-type regions can be clipped
+    # against the road network too, not just buildings.
+    fillet_radius_px = DEFAULT_FILLET_RADIUS_M / scale_m_per_px
+    widthed_roads = [r for r in roads if r.get("width_px", 0) > 0]
+    zero_width_roads = [r for r in roads if r.get("width_px", 0) <= 0]
+    road_network = _build_road_network(widthed_roads, fillet_radius_px, buildings_union) if widthed_roads else None
+    road_network = road_network if road_network is not None and not road_network.is_empty else None
+
+    # Anything a land-type region should never be drawn under -- buildings
+    # (masked by roof fill) and now roads (pavement, not ground cover).
+    landtype_clip = unary_union(
+        [g for g in (buildings_union, road_network) if g is not None]
+    ) if (buildings_union is not None or road_network is not None) else None
 
     # --- Land type hatches (drawn first — bottommost) ---
     for lt in land_types:
         lt_style = lt.get("style", {})
+        polygons = lt["polygons"]
+        if landtype_clip is not None:
+            polygons = _clip_polygons(polygons, landtype_clip)
         if lt_style.get("outline_only", False):
-            _draw_multipolygon_outlines(msp, lt["polygons"], poly_pts, "LANDTYPE")
+            _draw_multipolygon_outlines(msp, polygons, poly_rings, "LANDTYPE")
         else:
-            _draw_multipolygon_hatches(msp, lt["polygons"], poly_pts, "LANDTYPE", lt_style)
+            _draw_multipolygon_hatches(msp, polygons, poly_rings, "LANDTYPE", lt_style)
 
     # --- Roads ---
-    for road in roads:
+    if road_network is not None:
+        polys = list(road_network.geoms) if hasattr(road_network, "geoms") else [road_network]
+        for poly in polys:
+            if poly.is_empty:
+                continue
+            for ring in [poly.exterior, *poly.interiors]:
+                # This boundary is already a dense, smooth polygon straight
+                # from Shapely's buffer/fillet math -- fitting a SPLINE
+                # through a resampling of it (as elsewhere in this file)
+                # risks the CAD-side curve interpolation overshooting
+                # between sample points, which is exactly what reopened a
+                # small gap into a building near the clipped edge here.
+                # Drawing the exact computed points as a polyline has no
+                # overshoot; a light simplify() only drops redundant
+                # near-collinear points on long straight stretches, it
+                # doesn't touch the fillet's curved detail.
+                simplified = ring.simplify(1.0, preserve_topology=True)
+                pts_m = [px_to_m(pt) for pt in simplified.coords]
+                msp.add_lwpolyline(pts_m, close=True, dxfattribs={"layer": "ROADS"})
+
+    for road in zero_width_roads:
         line = road["line"]
-        pts_m = [px_to_m(pt) for pt in line.coords]
-        msp.add_lwpolyline(pts_m, dxfattribs={"layer": "ROADS"})
+        segments = _clip_line(line, buildings_union) if buildings_union is not None else [line]
+        for segment in segments:
+            if segment.length == 0:
+                continue
+            pts_m = [px_to_m(pt) for pt in _resample_line(segment)]
+            msp.add_spline(fit_points=pts_m, dxfattribs={"layer": "ROADS"})
 
     # --- Trees (block insertions) ---
     if block_names:
@@ -112,7 +229,7 @@ def export_dxf(
     # --- Roofs: white fill hatch (masks everything below) ---
     for poly in buildings:
         pts = poly_pts(poly)
-        hatch = msp.add_hatch(color=7, dxfattribs={"layer": "ROOFS_FILL"})  # color 7 = white
+        hatch = msp.add_hatch(color=255, dxfattribs={"layer": "ROOFS_FILL"})  # ACI 255 = true white, never swaps
         hatch.paths.add_polyline_path(pts, is_closed=True)
         hatch.set_pattern_fill("SOLID")
 
@@ -121,26 +238,139 @@ def export_dxf(
         pts = poly_pts(poly)
         msp.add_lwpolyline(pts, close=True, dxfattribs={"layer": "ROOFS"})
 
+    # Entities are already added bottom-to-top in the order above, but some
+    # viewers regenerate by entity type rather than raw insertion order
+    # (e.g. all HATCH entities before all INSERT/LWPOLYLINE entities),
+    # which breaks the roof-fill-masks-everything-below effect. Writing an
+    # explicit AutoCAD redraw order (SORTENTSTABLE) forces every compliant
+    # viewer to respect the intended stacking regardless of entity type.
+    # SORTENTS_ALL includes bit 32 (plotting/print preview) -- a bare REGEN
+    # bit (16) alone does not affect what a print-preview view shows.
+    doc.header["$SORTENTS"] = SORTENTS_ALL
+    msp.set_redraw_order({
+        entity.dxf.handle: f"{i:X}" for i, entity in enumerate(msp)
+    })
+
     doc.saveas(str(output_path))
 
 
-def _add_layer(doc, name: str, hex_color: str, lineweight: int):
+def _build_road_network(roads: list[dict], fillet_radius_px: float, buildings_union):
+    """
+    Merge every road's pavement corridor into one polygon (or one polygon
+    per disconnected road group) and round its concave (inside) corners.
+
+    Drawing each road's two offset edges independently, as before, means
+    two roads crossing or meeting at a junction produce edges that
+    literally cross each other -- there's no shared understanding that
+    they're the same intersection. Buffering each centerline out to its
+    road width turns every road into a polygon; unioning those polygons
+    merges any that touch or cross into one shape, so an intersection is
+    just wherever two corridors overlap -- no separate junction-detection
+    step needed.
+
+    The corners at that merge are sharp by construction (buffer() with
+    flat/round caps doesn't know about fillets). A round "closing"
+    morphological operation -- dilate by the fillet radius, then erode by
+    the same amount -- fills in concave notches up to that radius,
+    which is exactly a fillet at each inside corner, while leaving convex
+    (outside) corners untouched. This matches spec.md §4b's fillet
+    description without needing explicit per-corner curvature detection.
+    """
+    corridors = [road["line"].buffer(road["width_px"] / 2, cap_style="flat") for road in roads]
+    network = unary_union(corridors)
+    network = network.buffer(fillet_radius_px, join_style="round").buffer(
+        -fillet_radius_px, join_style="round"
+    )
+    if buildings_union is not None:
+        network = network.difference(buildings_union)
+    return network
+
+
+def _clip_line(line: LineString, clip_against) -> list[LineString]:
+    """Remove the portions of `line` that fall inside `clip_against`,
+    returning the surviving piece(s) as a list of LineStrings."""
+    remainder = line.difference(clip_against)
+    if remainder.is_empty:
+        return []
+    if remainder.geom_type == "LineString":
+        return [remainder]
+    if remainder.geom_type == "MultiLineString":
+        return list(remainder.geoms)
+    return []  # degenerate result (e.g. Point) -- nothing meaningful to draw
+
+
+def _clip_polygons(mpoly, clip_against):
+    """Subtract `clip_against` from a Polygon/MultiPolygon, discarding any
+    non-polygonal slivers the boolean difference may produce."""
+    if mpoly.is_empty:
+        return mpoly
+    remainder = mpoly.difference(clip_against)
+    if remainder.is_empty:
+        return remainder
+    if remainder.geom_type in ("Polygon", "MultiPolygon"):
+        return remainder
+    if remainder.geom_type == "GeometryCollection":
+        polys = [g for g in remainder.geoms if g.geom_type == "Polygon"]
+        return MultiPolygon(polys) if polys else MultiPolygon()
+    return MultiPolygon()
+
+
+def _resample_line(line: LineString, n_samples: int = 30) -> list[tuple]:
+    """
+    Evenly resample a LineString by arc length.
+
+    Fixes two related artifacts from shapely's offset_curve(): its raw
+    output has an uneven, side-dependent point density, which both (a)
+    makes one offset edge visually read as a smoother curve than the
+    other, and (b) can make the CAD-side spline interpolation through
+    sparse/uneven fit points overshoot and cross the paired edge near
+    vertices. Resampling at even arc-length intervals removes both.
+    """
+    length = line.length
+    if length == 0:
+        return list(line.coords)
+    n_samples = max(n_samples, 2)
+    return [
+        tuple(line.interpolate(i / (n_samples - 1) * length).coords[0])
+        for i in range(n_samples)
+    ]
+
+
+def _add_layer(doc, name: str, hex_color: str, line_weight_mm: float, aci: int = 251):
+    """
+    Register a layer with both a true-color (rgb) and a fixed ACI fallback.
+
+    ACI 7 (the ezdxf/ezdxf.layers default) is the special "swap black/white
+    with background" index — fine for a lone outline, but it collides with
+    anything else also left at its default, invisibly merging layers in
+    viewers that don't resolve true-color. ACI 251 is a real dark gray that
+    reads the same regardless of background, so layers stay visually
+    distinct even without true-color support.
+    """
     r, g, b = int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16)
     layer = doc.layers.new(name=name)
     layer.rgb = (r, g, b)
-    layer.lineweight = lineweight
+    layer.color = aci
+    # `layer.lineweight = ...` is NOT a real DXF-backed property on ezdxf's
+    # Layer -- it silently creates a throwaway Python attribute instead of
+    # setting the DXF lineweight. The actual attribute lives under `.dxf`.
+    layer.dxf.lineweight = _nearest_dxf_lineweight(line_weight_mm)
 
 
-def _draw_multipolygon_outlines(msp, mpoly, poly_pts_fn, layer_name: str):
+def _draw_multipolygon_outlines(msp, mpoly, poly_rings_fn, layer_name: str):
     if mpoly.is_empty:
         return
     polys = list(mpoly.geoms) if hasattr(mpoly, "geoms") else [mpoly]
     for poly in polys:
-        pts = poly_pts_fn(poly)
-        msp.add_lwpolyline(pts, close=True, dxfattribs={"layer": layer_name})
+        exterior, holes = poly_rings_fn(poly)
+        msp.add_lwpolyline(exterior, close=True, dxfattribs={"layer": layer_name})
+        # Draw each hole (e.g. a building clipped out of this land-type
+        # region) as its own closed loop so it reads visually as excluded.
+        for hole in holes:
+            msp.add_lwpolyline(hole, close=True, dxfattribs={"layer": layer_name})
 
 
-def _draw_multipolygon_hatches(msp, mpoly, poly_pts_fn, layer_name: str, lt_style: dict):
+def _draw_multipolygon_hatches(msp, mpoly, poly_rings_fn, layer_name: str, lt_style: dict):
     if mpoly.is_empty:
         return
     polys = list(mpoly.geoms) if hasattr(mpoly, "geoms") else [mpoly]
@@ -148,18 +378,33 @@ def _draw_multipolygon_hatches(msp, mpoly, poly_pts_fn, layer_name: str, lt_styl
     hatch_type = lt_style.get("hatch_type", "lines")
     angle = lt_style.get("hatch_angle_deg", 45.0)
     spacing = lt_style.get("hatch_spacing_mm", 3.0)
+    # ezdxf's hatch `scale` is a multiplier on the pattern's built-in
+    # (inch-based) spacing, applied directly in modelspace units. Our
+    # modelspace is real-world meters, not inches or mm, so a naive
+    # spacing_mm/25.4 conversion produces a scale far too small (e.g.
+    # 3mm/25.4 = 0.12) -- at real-world scale that packs the pattern so
+    # densely it reads as a solid fill rather than visible hatch lines.
+    # Deriving a correct scale needs the eventual print/plot scale, which
+    # isn't tracked yet, so an explicit `hatch_scale` override bypasses the
+    # broken auto-conversion until that's wired up.
+    scale = lt_style.get("hatch_scale", spacing / 25.4)
 
     for poly in polys:
-        pts = poly_pts_fn(poly)
+        exterior, holes = poly_rings_fn(poly)
         hatch = msp.add_hatch(dxfattribs={"layer": layer_name})
-        hatch.paths.add_polyline_path(pts, is_closed=True)
+        hatch.paths.add_polyline_path(exterior, is_closed=True)
+        # Each hole is added as its own boundary path on the same HATCH --
+        # ezdxf/DXF treats nested loops as exclusions from the fill
+        # automatically, no extra flags needed (verified against a render).
+        for hole in holes:
+            hatch.paths.add_polyline_path(hole, is_closed=True)
 
         if hatch_type == "solid":
             hatch.set_pattern_fill("SOLID")
         elif hatch_type == "lines":
-            hatch.set_pattern_fill("LINE", scale=spacing / 25.4, angle=angle)
+            hatch.set_pattern_fill("LINE", scale=scale, angle=angle)
         elif hatch_type == "crosshatch":
-            hatch.set_pattern_fill("NET", scale=spacing / 25.4, angle=angle)
+            hatch.set_pattern_fill("NET", scale=scale, angle=angle)
         elif hatch_type == "dots":
             hatch.set_pattern_fill("DOTS", scale=spacing / 25.4)
         else:

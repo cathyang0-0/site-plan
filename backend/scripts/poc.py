@@ -23,13 +23,16 @@ import argparse
 import random
 from pathlib import Path
 from PIL import Image
-from shapely.geometry import Polygon, LineString
+from shapely.geometry import Polygon, LineString, MultiPolygon
 
 # Add project root to path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.export.dxf import export_dxf
+from app.pipeline.trees import filter_placements, MIN_CANOPY_RADIUS_M
+
+DEFAULT_BLOCK_RADIUS_PX = 20.0  # matches default_tree_block()'s default radius
 
 
 def placeholder_buildings(img_w: int, img_h: int) -> list[Polygon]:
@@ -49,21 +52,88 @@ def placeholder_roads(img_w: int, img_h: int) -> list[dict]:
     ]
 
 
-def placeholder_trees(img_w: int, img_h: int, count: int = 30) -> list[dict]:
-    """Scatter random trees across the image (avoiding building areas)."""
+def placeholder_trees(
+    img_w: int,
+    img_h: int,
+    buildings: list[Polygon],
+    scale_m_per_px: float,
+    n_blocks: int = 1,
+    candidate_count: int = 500,
+) -> list[dict]:
+    """
+    Scatter dense random tree candidates, then run them through the real
+    filter_placements() (building overlap + tree-tree overlap suppression)
+    so the surviving set reads as plausibly planted rather than a uniform
+    random scatter. Canopy size varies per tree, and scale is derived from
+    that size relative to the tree block's reference radius.
+
+    Mirrors detect_trees()'s minimum-canopy rule: candidates smaller than
+    MIN_CANOPY_RADIUS_M are enlarged rather than dropped.
+    """
     rng = random.Random(0)
+    min_radius_px = MIN_CANOPY_RADIUS_M / scale_m_per_px
+
+    candidates = []
+    for _ in range(candidate_count):
+        x = rng.uniform(0, img_w)
+        y = rng.uniform(0, img_h)
+        radius_px = rng.uniform(8, 45)  # varied canopy sizes, small to large
+        radius_px = max(radius_px, min_radius_px)
+        candidates.append({
+            "x_px": x,
+            "y_px": y,
+            "radius_px": radius_px,
+            "radius_m": radius_px * scale_m_per_px,
+        })
+
+    accepted = filter_placements(candidates, buildings, overlap_threshold=0.30)
+
     trees = []
-    for _ in range(count):
-        x = rng.uniform(50, img_w - 50)
-        y = rng.uniform(50, img_h - 50)
-        radius_px = rng.uniform(15, 40)
+    for det in accepted:
         trees.append({
-            "block_idx": 0,
-            "position": (x, y),
-            "scale": 1.0,
+            "block_idx": rng.randrange(n_blocks),
+            "position": (det["x_px"], det["y_px"]),
+            "scale": det["radius_px"] / DEFAULT_BLOCK_RADIUS_PX,
             "rotation": rng.uniform(0, 360),
         })
     return trees
+
+
+def placeholder_land_types(img_w: int, img_h: int) -> list[dict]:
+    """
+    Return a few fake land-type regions to exercise hatch export.
+
+    All three currently share one style -- parallel lines, 45°, scale 1 --
+    as a uniform placeholder while the mm-to-hatch-scale conversion (which
+    needs the eventual print/plot scale to be correct) isn't wired up yet.
+    """
+    placeholder_style = {
+        "hatch_type": "lines", "hatch_color": "#888888",
+        "hatch_angle_deg": 45.0, "hatch_scale": 1,
+    }
+    return [
+        {
+            "label": "Vegetation",
+            "polygons": MultiPolygon([Polygon([
+                (0, 0), (img_w * 0.35, 0), (img_w * 0.35, img_h * 0.25), (0, img_h * 0.25),
+            ])]),
+            "style": dict(placeholder_style),
+        },
+        {
+            "label": "Paved / hardscape",
+            "polygons": MultiPolygon([Polygon([
+                (img_w * 0.65, img_h * 0.7), (img_w, img_h * 0.7), (img_w, img_h), (img_w * 0.65, img_h),
+            ])]),
+            "style": dict(placeholder_style),
+        },
+        {
+            "label": "Bare earth / farmland",
+            "polygons": MultiPolygon([Polygon([
+                (0, img_h * 0.75), (img_w * 0.3, img_h * 0.75), (img_w * 0.3, img_h), (0, img_h),
+            ])]),
+            "style": dict(placeholder_style),
+        },
+    ]
 
 
 def default_tree_block(radius_px: float = 20.0, n_pts: int = 32) -> list[list]:
@@ -105,13 +175,19 @@ def main():
     print("Generating placeholder geometry (real CV models not yet wired up)...")
     buildings = placeholder_buildings(img_w, img_h)
     roads = placeholder_roads(img_w, img_h)
-    tree_placements = placeholder_trees(img_w, img_h)
+    tree_placements = placeholder_trees(img_w, img_h, buildings, args.scale)
     tree_blocks = [default_tree_block()]
+    land_types = placeholder_land_types(img_w, img_h)
+    print(f"  Buildings: {len(buildings)}  Roads: {len(roads)}  "
+          f"Trees: {len(tree_placements)}  Land types: {len(land_types)}")
 
+    # Line weights match spec.md §5's architectural hierarchy: roof outlines
+    # read heaviest, roads readable but secondary, trees/land types are texture.
     style = {
-        "roofs": {"color": "#000000"},
-        "roads": {"color": "#333333"},
-        "trees": {"color": "#555555"},
+        "roofs": {"color": "#000000", "line_weight_mm": 0.40},
+        "roads": {"color": "#333333", "line_weight_mm": 0.18},
+        "trees": {"color": "#555555", "line_weight_mm": 0.10},
+        "land_types": [{"color": "#aaaaaa", "line_weight_mm": 0.05}],
     }
 
     output_path = Path(args.output)
@@ -122,7 +198,7 @@ def main():
         roads=roads,
         tree_placements=tree_placements,
         tree_block_curves=tree_blocks,
-        land_types=[],
+        land_types=land_types,
         style=style,
         scale_m_per_px=args.scale,
         origin_px=origin_px,
