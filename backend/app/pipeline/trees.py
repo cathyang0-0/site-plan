@@ -27,10 +27,14 @@ def detect_trees(image: Image.Image, scale_m_per_px: float) -> list[dict]:
         raise ImportError("deepforest not installed. Run: pip install deepforest")
 
     model = deepforest_main.deepforest()
-    model.use_release()  # download pretrained weights on first run
+    # deepforest 2.x: pretrained weights come from HuggingFace (downloads and
+    # caches on first run). Replaces the removed 1.x use_release().
+    model.load_model("weecology/deepforest-tree")
 
-    img_np = np.array(image)
-    boxes = model.predict_image(image=img_np, return_plot=False)
+    img_np = np.array(image.convert("RGB"))
+    # predict_tile handles arbitrarily large images by windowing at the
+    # model's native patch size; predict_image degrades badly beyond ~400px.
+    boxes = model.predict_tile(image=img_np, patch_size=400, patch_overlap=0.25)
 
     if boxes is None or len(boxes) == 0:
         return []

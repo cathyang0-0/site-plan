@@ -11,13 +11,17 @@ Run:
     python scripts/poc.py --image path/to/aerial.png --scale 0.15 --output out.dxf
 
 Arguments:
-    --image     Path to an aerial image (PNG or JPG)
-    --scale     Real-world meters per pixel (default: 0.15 for Mapbox zoom 19)
-    --output    Output DXF path (default: output.dxf)
+    --image       Path to an aerial image (PNG or JPG)
+    --scale       Real-world meters per pixel (default: 0.15 for Mapbox zoom 19)
+    --output      Output DXF path (default: output.dxf)
+    --real-trees  Run real DeepForest tree detection on the image instead of
+                  placeholder geometry (first run downloads model weights;
+                  CPU inference takes a few minutes on large images)
 
-Note: CV models are not yet trained. This script uses placeholder
-      detections so you can validate the DXF output structure first.
-      Swap in real detections as each pipeline module is implemented.
+Default mode uses placeholder detections so the DXF output structure can be
+validated without any models. --real-trees is the first real module wired in;
+buildings/roads/land types stay empty in that mode (their placeholders sit at
+fixed pixel coords that mean nothing on real imagery).
 """
 import argparse
 import random
@@ -153,11 +157,34 @@ def default_tree_block(radius_px: float = 20.0, n_pts: int = 32) -> list[list]:
     return [circle, horizontal, vertical]
 
 
+def real_trees(image: Image.Image, scale_m_per_px: float, n_blocks: int = 1) -> list[dict]:
+    """Run real DeepForest detection + overlap filtering on the image and
+    convert the surviving detections into block placements."""
+    from app.pipeline.trees import detect_trees
+
+    rng = random.Random(0)
+    detections = detect_trees(image, scale_m_per_px)
+    print(f"  Raw detections: {len(detections)}")
+    # No real building detection yet, so only tree-tree overlap applies.
+    accepted = filter_placements(detections, building_polygons=[], overlap_threshold=0.30)
+    return [
+        {
+            "block_idx": rng.randrange(n_blocks),
+            "position": (det["x_px"], det["y_px"]),
+            "scale": det["radius_px"] / DEFAULT_BLOCK_RADIUS_PX,
+            "rotation": rng.uniform(0, 360),
+        }
+        for det in accepted
+    ]
+
+
 def main():
     parser = argparse.ArgumentParser(description="Site Plan Drafter — POC")
     parser.add_argument("--image", required=True, help="Path to aerial image (PNG/JPG)")
     parser.add_argument("--scale", type=float, default=0.15, help="Meters per pixel")
     parser.add_argument("--output", default="output.dxf", help="Output DXF path")
+    parser.add_argument("--real-trees", action="store_true",
+                        help="Run real DeepForest tree detection instead of placeholders")
     args = parser.parse_args()
 
     image_path = Path(args.image)
@@ -172,12 +199,19 @@ def main():
 
     origin_px = (img_w // 2, img_h // 2)
 
-    print("Generating placeholder geometry (real CV models not yet wired up)...")
-    buildings = placeholder_buildings(img_w, img_h)
-    roads = placeholder_roads(img_w, img_h)
-    tree_placements = placeholder_trees(img_w, img_h, buildings, args.scale)
+    if args.real_trees:
+        print("Running real tree detection (DeepForest)...")
+        buildings = []
+        roads = []
+        land_types = []
+        tree_placements = real_trees(image, args.scale)
+    else:
+        print("Generating placeholder geometry (real CV models not yet wired up)...")
+        buildings = placeholder_buildings(img_w, img_h)
+        roads = placeholder_roads(img_w, img_h)
+        tree_placements = placeholder_trees(img_w, img_h, buildings, args.scale)
+        land_types = placeholder_land_types(img_w, img_h)
     tree_blocks = [default_tree_block()]
-    land_types = placeholder_land_types(img_w, img_h)
     print(f"  Buildings: {len(buildings)}  Roads: {len(roads)}  "
           f"Trees: {len(tree_placements)}  Land types: {len(land_types)}")
 
