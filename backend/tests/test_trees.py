@@ -1,4 +1,4 @@
-"""Tests for trees.py — filter_placements (fully implemented)."""
+"""Tests for trees.py — filter_placements and fill_dense_stands."""
 import pytest
 from shapely.geometry import Polygon
 
@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.pipeline.trees import filter_placements
+from app.pipeline.trees import filter_placements, fill_dense_stands
 
 
 def _det(x, y, r):
@@ -68,6 +68,16 @@ class TestFilterPlacements:
         result = filter_placements(dets, [])
         assert result[0] == dets[0]
 
+    def test_tree_overlap_threshold_tunable(self):
+        # Two r=30 canopies 30px apart overlap ~39%. The default tree-tree
+        # threshold (0.30, spec §7) suppresses the second; relaxing to 0.60
+        # keeps both.
+        dets = [_det(100, 100, 30), _det(130, 100, 30)]
+        result_default = filter_placements(dets, [])
+        result_relaxed = filter_placements(dets, [], tree_overlap_threshold=0.60)
+        assert len(result_default) == 1
+        assert len(result_relaxed) == 2
+
     def test_custom_overlap_threshold(self):
         # Tree is 50% inside building — below default 0.30? No, 50 > 30 → suppressed by default
         # With threshold=0.6, it should pass
@@ -95,3 +105,49 @@ class TestFilterPlacements:
         result = filter_placements(dets, buildings)
         assert len(result) == 1
         assert result[0] == dets[1]
+
+
+def _stand(x, y, rx, ry, scale=0.1):
+    return {
+        "x_px": x, "y_px": y,
+        "radius_px": rx, "ry_px": ry,
+        "radius_m": rx * scale,
+        "stand": True,
+    }
+
+
+class TestFillDenseStands:
+    def test_no_stands_passthrough(self):
+        dets = [_det(100, 100, 10), _det(300, 300, 10)]
+        assert fill_dense_stands(dets, 0.1) == dets
+
+    def test_stand_replaced_by_multiple_synthetic(self):
+        # 150px radius at 0.1 m/px = 15m stand — well over the 10m cap
+        dets = [_stand(500, 500, 150, 150)]
+        result = fill_dense_stands(dets, 0.1)
+        synthetic = [d for d in result if d.get("synthetic")]
+        assert len(synthetic) >= 3
+        assert not any(d.get("stand") for d in result)
+
+    def test_synthetic_stay_inside_stand_ellipse(self):
+        dets = [_stand(500, 500, 150, 120)]
+        for d in fill_dense_stands(dets, 0.1):
+            dx = (d["x_px"] - 500) / 150
+            dy = (d["y_px"] - 500) / 120
+            assert dx * dx + dy * dy <= 1.0
+
+    def test_synthetic_sizes_and_spacing_vary(self):
+        dets = [_stand(500, 500, 200, 200)]
+        synthetic = fill_dense_stands(dets, 0.1)
+        radii = {round(d["radius_m"], 3) for d in synthetic}
+        assert len(radii) > 1  # size jitter present
+
+    def test_singles_kept_alongside_fill(self):
+        dets = [_det(50, 50, 10), _stand(500, 500, 150, 150)]
+        result = fill_dense_stands(dets, 0.1)
+        assert dets[0] in result
+
+    def test_deterministic_for_same_seed(self):
+        dets = [_stand(500, 500, 150, 150)]
+        assert fill_dense_stands(dets, 0.1, seed=1) == fill_dense_stands(dets, 0.1, seed=1)
+        assert fill_dense_stands(dets, 0.1, seed=1) != fill_dense_stands(dets, 0.1, seed=2)

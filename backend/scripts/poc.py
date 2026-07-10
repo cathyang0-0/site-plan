@@ -157,14 +157,32 @@ def default_tree_block(radius_px: float = 20.0, n_pts: int = 32) -> list[list]:
     return [circle, horizontal, vertical]
 
 
-def real_trees(image: Image.Image, scale_m_per_px: float, n_blocks: int = 1) -> list[dict]:
-    """Run real DeepForest detection + overlap filtering on the image and
-    convert the surviving detections into block placements."""
-    from app.pipeline.trees import detect_trees
+def real_trees(
+    image: Image.Image,
+    scale_m_per_px: float,
+    n_blocks: int = 1,
+    stand_fill: bool = True,
+) -> list[dict]:
+    """Run real DeepForest detection + dense-stand fill + overlap filtering
+    on the image and convert the surviving detections into block placements."""
+    from app.pipeline.trees import detect_trees, fill_dense_stands, MAX_CANOPY_RADIUS_M
 
     rng = random.Random(0)
     detections = detect_trees(image, scale_m_per_px)
-    print(f"  Raw detections: {len(detections)}")
+    n_stands = sum(1 for d in detections if d.get("stand"))
+    print(f"  Raw detections: {len(detections)} ({n_stands} dense-stand boxes)")
+    if stand_fill:
+        # fill_dense_stands puts synthetic trees AFTER real detections so
+        # filter_placements gives the real ones priority where they overlap.
+        detections = fill_dense_stands(detections, scale_m_per_px)
+        print(f"  After stand fill: {len(detections)}")
+    else:
+        # No fill: draw each stand as a single max-size tree so the dense
+        # canopy at least isn't blank.
+        for d in detections:
+            if d.get("stand"):
+                d["radius_m"] = MAX_CANOPY_RADIUS_M
+                d["radius_px"] = MAX_CANOPY_RADIUS_M / scale_m_per_px
     # No real building detection yet, so only tree-tree overlap applies.
     accepted = filter_placements(detections, building_polygons=[], overlap_threshold=0.30)
     return [
@@ -185,6 +203,9 @@ def main():
     parser.add_argument("--output", default="output.dxf", help="Output DXF path")
     parser.add_argument("--real-trees", action="store_true",
                         help="Run real DeepForest tree detection instead of placeholders")
+    parser.add_argument("--no-stand-fill", action="store_true",
+                        help="Draw oversized dense-canopy detections as single max-size "
+                             "trees instead of filling them with synthetic stands")
     args = parser.parse_args()
 
     image_path = Path(args.image)
@@ -204,7 +225,7 @@ def main():
         buildings = []
         roads = []
         land_types = []
-        tree_placements = real_trees(image, args.scale)
+        tree_placements = real_trees(image, args.scale, stand_fill=not args.no_stand_fill)
     else:
         print("Generating placeholder geometry (real CV models not yet wired up)...")
         buildings = placeholder_buildings(img_w, img_h)

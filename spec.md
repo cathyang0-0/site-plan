@@ -117,9 +117,9 @@ Road width estimated from the mask's medial axis thickness → used to offset ce
 Alternative if DeepForest performs poorly on the target imagery style: SAM2 Automatic Mask Generator filtered to round blobs in the 2–15 m diameter range.
 
 **Post-processing:**
-1. NMS on overlapping detections (IoU threshold 0.3)
+1. NMS on overlapping detections (IoU threshold 0.4 — deliberately permissive: real forest crowns interlock, and a strict threshold blanks out dense stands)
 2. Extract centroid and radius from each bounding box
-3. Filter: radius must be 1–10 m
+3. Size handling: radius < 1.5 m enlarged to 1.5 m (keep small trees readable); radius > 10 m treated as a **dense stand** (merged crowns the detector can't separate) and filled with synthetic trees scattered across the box's ellipse — jittered spacing and sizes so the fill reads as a natural stand, not a pattern. Fill is strictly detection-led: only areas the model flagged as canopy are filled.
 4. Output: list of `(x, y, radius)` tuples in real-world coordinates
 
 **Layer name:** `TREES`
@@ -311,7 +311,7 @@ User clicks Download → selects DXF and/or 3DM → backend assembles file with 
 
 ### Overlap filtering
 
-Two overlap rules are enforced:
+Two overlap rules are enforced (thresholds independently tunable):
 1. A tree whose canopy overlaps a **building** by >30% is suppressed (implausible planting location)
 2. A tree whose canopy overlaps an **already-accepted tree** by >30% is suppressed (prevents dense clumping)
 
