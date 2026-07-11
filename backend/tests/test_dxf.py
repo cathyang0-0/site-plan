@@ -72,3 +72,12 @@ class TestTreeBlockCoordinates:
         assert abs(ins.dxf.insert.x - (-120)) < 1e-6
         assert abs(ins.dxf.insert.y - 90) < 1e-6
         assert abs(ins.dxf.xscale - 1.4) < 1e-6
+
+    def test_insert_uniformly_scaled_all_three_axes(self, tmp_path):
+        # All three scale axes must be equal, else the instance is non-uniform
+        # in 3D and Rhino refuses in-place block editing (default zscale=1.0
+        # against a scaled x/y is the trap).
+        doc = _export(tmp_path, [{"block_idx": 0, "position": (100, 100),
+                                  "scale": 1.4, "rotation": 0}])
+        ins = list(doc.modelspace().query("INSERT"))[0]
+        assert ins.dxf.xscale == ins.dxf.yscale == ins.dxf.zscale == 1.4

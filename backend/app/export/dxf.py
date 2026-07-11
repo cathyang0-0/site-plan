@@ -247,6 +247,12 @@ def export_dxf(
                     "layer": "TREES",
                     "xscale": placement["scale"],
                     "yscale": placement["scale"],
+                    # zscale must equal x/yscale: with the default zscale=1.0
+                    # a tree scaled to e.g. 1.3 is (1.3, 1.3, 1.0) -- uniform
+                    # in plan but NON-uniform in 3D, which makes Rhino refuse
+                    # in-place block editing. Setting all three equal keeps
+                    # the instance uniformly scaled and editable.
+                    "zscale": placement["scale"],
                     "rotation": placement["rotation"],
                 },
             )
