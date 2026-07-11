@@ -23,6 +23,8 @@ pyproj==3.7.2
 shapely==2.1.2
 numpy==2.3.5
 Pillow==12.0.0
+# Building footprints (Overture Maps GeoParquet bbox queries)
+overturemaps==1.0.1
 
 # CAD export
 ezdxf==1.4.4

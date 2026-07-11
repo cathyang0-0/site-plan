@@ -14,14 +14,16 @@ Arguments:
     --image       Path to an aerial image (PNG or JPG)
     --scale       Real-world meters per pixel (default: 0.15 for Mapbox zoom 19)
     --output      Output DXF path (default: output.dxf)
-    --real-trees  Run real DeepForest tree detection on the image instead of
-                  placeholder geometry (first run downloads model weights;
-                  CPU inference takes a few minutes on large images)
+    --real-trees      Run real DeepForest tree detection (first run downloads
+                      model weights; CPU inference takes a few minutes)
+    --real-buildings  Run real SAM2 zero-shot building detection; when combined
+                      with --real-trees, rooftop tree detections are suppressed
+                      by the building-overlap rule
 
 Default mode uses placeholder detections so the DXF output structure can be
-validated without any models. --real-trees is the first real module wired in;
-buildings/roads/land types stay empty in that mode (their placeholders sit at
-fixed pixel coords that mean nothing on real imagery).
+validated without any models. In real mode, modules without a --real-* flag
+stay empty (their placeholders sit at fixed pixel coords that mean nothing on
+real imagery).
 """
 import argparse
 import random
@@ -157,17 +159,16 @@ def default_tree_block(radius_px: float = 20.0, n_pts: int = 32) -> list[list]:
     return [circle, horizontal, vertical]
 
 
-def real_trees(
+def real_tree_detections(
     image: Image.Image,
     scale_m_per_px: float,
-    n_blocks: int = 1,
     stand_fill: bool = True,
 ) -> list[dict]:
-    """Run real DeepForest detection + dense-stand fill + overlap filtering
-    on the image and convert the surviving detections into block placements."""
+    """Run real DeepForest detection + dense-stand fill. Returns raw
+    detections (pre overlap-filtering) so callers can cross-check other
+    modules against them before suppression runs."""
     from app.pipeline.trees import detect_trees, fill_dense_stands, MAX_CANOPY_RADIUS_M
 
-    rng = random.Random(0)
     detections = detect_trees(image, scale_m_per_px)
     n_stands = sum(1 for d in detections if d.get("stand"))
     print(f"  Raw detections: {len(detections)} ({n_stands} dense-stand boxes)")
@@ -183,8 +184,12 @@ def real_trees(
             if d.get("stand"):
                 d["radius_m"] = MAX_CANOPY_RADIUS_M
                 d["radius_px"] = MAX_CANOPY_RADIUS_M / scale_m_per_px
-    # No real building detection yet, so only tree-tree overlap applies.
-    accepted = filter_placements(detections, building_polygons=[], overlap_threshold=0.30)
+    return detections
+
+
+def detections_to_placements(detections: list[dict], n_blocks: int = 1) -> list[dict]:
+    """Convert accepted detections into tree block placements."""
+    rng = random.Random(0)
     return [
         {
             "block_idx": rng.randrange(n_blocks),
@@ -192,7 +197,7 @@ def real_trees(
             "scale": det["radius_px"] / DEFAULT_BLOCK_RADIUS_PX,
             "rotation": rng.uniform(0, 360),
         }
-        for det in accepted
+        for det in detections
     ]
 
 
@@ -206,7 +211,20 @@ def main():
     parser.add_argument("--no-stand-fill", action="store_true",
                         help="Draw oversized dense-canopy detections as single max-size "
                              "trees instead of filling them with synthetic stands")
+    parser.add_argument("--real-buildings", action="store_true",
+                        help="Run real SAM2 zero-shot building detection (downloads the "
+                             "checkpoint on first run; several minutes of inference)")
+    parser.add_argument("--footprint-buildings", action="store_true",
+                        help="Fetch building footprints from Overture Maps instead of CV "
+                             "detection (preferred when the image is georeferenced; "
+                             "requires --bbox)")
+    parser.add_argument("--bbox", type=str, default=None,
+                        help="Geographic extent of the image as WEST,SOUTH,EAST,NORTH "
+                             "(lon/lat); the image must span exactly this bbox")
     args = parser.parse_args()
+
+    if args.footprint_buildings and not args.bbox:
+        parser.error("--footprint-buildings requires --bbox")
 
     image_path = Path(args.image)
     if not image_path.exists():
@@ -220,12 +238,47 @@ def main():
 
     origin_px = (img_w // 2, img_h // 2)
 
-    if args.real_trees:
-        print("Running real tree detection (DeepForest)...")
+    attribution = None
+    if args.real_trees or args.real_buildings or args.footprint_buildings:
         buildings = []
         roads = []
         land_types = []
-        tree_placements = real_trees(image, args.scale, stand_fill=not args.no_stand_fill)
+        tree_placements = []
+        detections = []
+        if args.real_trees:
+            print("Running real tree detection (DeepForest)...")
+            detections = real_tree_detections(
+                image, args.scale, stand_fill=not args.no_stand_fill
+            )
+        if args.footprint_buildings:
+            print("Fetching building footprints (Overture Maps)...")
+            from app.pipeline.footprints import (
+                fetch_building_footprints, footprints_to_pixels, ATTRIBUTION,
+            )
+            west, south, east, north = (float(v) for v in args.bbox.split(","))
+            geo_polys = fetch_building_footprints(west, south, east, north)
+            buildings = footprints_to_pixels(
+                geo_polys, west, south, east, north, img_w, img_h
+            )
+            attribution = ATTRIBUTION
+            print(f"  Footprints fetched: {len(buildings)}")
+        elif args.real_buildings:
+            print("Running real building detection (SAM2 zero-shot)...")
+            from app.pipeline.buildings import detect_buildings, suppress_canopy_false_positives
+            buildings = detect_buildings(image, scale_m_per_px=args.scale)
+            print(f"  Buildings detected: {len(buildings)}")
+            if detections:
+                # Raw tree detections expose SAM2's crown false positives;
+                # must happen BEFORE filter_placements suppresses trees
+                # against buildings (else false buildings hide their trees).
+                # (Footprint buildings are authoritative -- no cross-filter.)
+                buildings = suppress_canopy_false_positives(buildings, detections)
+                print(f"  Buildings after canopy cross-filter: {len(buildings)}")
+        if args.real_trees:
+            # >30% building-overlap rule suppresses rooftop tree detections.
+            accepted = filter_placements(detections, building_polygons=buildings)
+            tree_placements = detections_to_placements(accepted)
+            print(f"  Trees after overlap filtering: {len(tree_placements)}")
     else:
         print("Generating placeholder geometry (real CV models not yet wired up)...")
         buildings = placeholder_buildings(img_w, img_h)
@@ -257,14 +310,15 @@ def main():
         style=style,
         scale_m_per_px=args.scale,
         origin_px=origin_px,
+        attribution=attribution,
     )
 
     print(f"Done. Open {output_path} in Rhino, AutoCAD, or Vectorworks to check the output.")
     print()
     print("Next steps:")
     print("  1. Check layer structure and geometry in your CAD app")
-    print("  2. Implement _run_sam2_fallback() in pipeline/buildings.py")
-    print("  3. Replace placeholder_buildings() with real detections")
+    print("  2. Implement road detection (pipeline/roads.py)")
+    print("  3. Wire land-type clustering into real mode (pipeline/landtypes.py)")
 
 
 if __name__ == "__main__":

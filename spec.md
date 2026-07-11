@@ -60,6 +60,10 @@ Modules run in parallel after imagery is fetched. Each can be independently enab
 
 **Goal:** Clean closed polygons for all building footprints.
 
+**Primary source — Overture Maps footprints (no CV):** for georeferenced sites (the standard map-selection flow), building footprints are fetched from the Overture Maps buildings theme (merges OpenStreetMap, Microsoft ML footprints, Google Open Buildings, USGS lidar) via a per-site bbox query against their cloud-hosted GeoParquet (~1s, a few hundred KB; no local mirror). Footprints are professionally validated, already orthogonal, and include canopy-occluded buildings that no imagery-based detector can see. License: ODbL — exported drawings are "Produced Works" and only require an attribution note (stamped on the `NOTES` layer at export). Validated 2026-07: 659 footprints for the Alamo Heights test bbox vs 96 (with false positives) from SAM2 zero-shot.
+
+**CV fallback (below) applies when:** input is a non-georeferenced image (v2 image upload), footprint data is missing/stale for the region, or the user wants to catch construction newer than the data.
+
 **Model recommendation — fine-tuned segmentation:**
 
 Start with a U-Net (ResNet-50 or EfficientNet-B4 backbone) fine-tuned on one of:
@@ -299,6 +303,16 @@ Calibration persists within the session. Repeated across sessions if new blocks 
 ### Step 4 — Assign land type hatches
 For each detected land cluster, user sees a color-coded thumbnail and assigns a hatch or discards it. User has the option to make hatch a gradient (offsets a distance from boundary and assigns the same hatch with lower density closer to the boundary, a slider adjusts gradient level - number of offset steps, 0 being non gradient). This is the only step requiring active user judgment.
 
+### Step 4.5 — Manual tree corrections (planned)
+
+Detection will miss trees (especially in dense, low-contrast canopy) and occasionally place false ones. The preview canvas gets three manual correction tools so the user can fix the tree layer without leaving the app:
+
+- **Plot tree:** click to place an individual tree symbol the detector missed. Optional radius drag (or default to the detected-crown median). Manually plotted trees flow through the same block assignment, calibration scaling, and export path as detected ones.
+- **Paint fill area:** brush over a region of canopy to have it synthetically filled with trees, using the same stand-fill generator as oversized detections (jittered spacing, size variance, clearings — see §4c). Repainting an area regenerates its fill; the brush is the manual counterpart of a detected dense-stand box.
+- **Erase:** remove trees — individually (click) or by brushing an area. Works on detected, stand-filled, and manually plotted trees alike.
+
+Manual edits are applied to the tree placement list before overlap filtering and export, so suppression rules and roof masking treat manual trees exactly like detected ones. Edits persist within the session.
+
 ### Step 5 — Style
 User sees a thumbnail preview and adjusts line weights, colors, opacity, and hatch parameters per layer. Preview (SVG) updates live. (can be a simplified standard drawing that has all the components, doesn't ave to match the actual site plan generated) 
 
@@ -481,6 +495,7 @@ Library: `rhino3dm` (Python, v8.17, MIT)
 - Style controls: color, line weight per layer; hatch style per land type; tree block random assignment
 - Roof white-fill masking (automatic, always on)
 - SVG preview with live style updates
+- Manual tree corrections on the preview: plot missed trees, paint areas for synthetic stand fill, erase (see §6, Step 4.5)
 - DXF export with blocks, layers, hatches
 - Local coordinate origin (site center = 0,0)
 - Processing time target: <60s for a 500×500 m site

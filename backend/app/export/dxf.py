@@ -14,6 +14,7 @@ needing explicit graph-based junction detection.
 """
 import random
 import ezdxf
+import ezdxf.bbox
 from ezdxf import colors
 from ezdxf.enums import TextEntityAlignment
 from ezdxf.lldxf.const import VALID_DXF_LINEWEIGHTS
@@ -65,6 +66,9 @@ def export_dxf(
     style: dict,
     scale_m_per_px: float,
     origin_px: tuple,               # (cx, cy) — pixel coords of local origin
+    attribution: str | None = None,  # data-license credit (e.g. ODbL requires
+                                     # it for Overture footprints); drawn as a
+                                     # small gray note below the site
 ):
     """
     Assemble all geometry into a layered DXF R2018 file.
@@ -237,6 +241,21 @@ def export_dxf(
     for poly in buildings:
         pts = poly_pts(poly)
         msp.add_lwpolyline(pts, close=True, dxfattribs={"layer": "ROOFS"})
+
+    # --- Data attribution note (license requirement, e.g. Overture/ODbL) ---
+    if attribution:
+        _add_layer(doc, "NOTES", "#999999", 0.05)
+        extents = ezdxf.bbox.extents(msp, fast=True)
+        if extents.has_data:
+            text = msp.add_text(
+                attribution,
+                height=3.0,  # meters; legible at typical context-plan scales
+                dxfattribs={"layer": "NOTES"},
+            )
+            text.set_placement(
+                (extents.extmin.x, extents.extmin.y - 6.0),
+                align=TextEntityAlignment.TOP_LEFT,
+            )
 
     # Entities are already added bottom-to-top in the order above, but some
     # viewers regenerate by entity type rather than raw insertion order
