@@ -73,6 +73,16 @@ class TestFilterPlacements:
         result = filter_placements(dets, [])
         assert result[0] == dets[0]
 
+    def test_small_tree_inside_large_suppressed_either_order(self):
+        # A small crown fully inside a large one must be suppressed no matter
+        # which is processed first (regression: overlap was measured against
+        # the incoming canopy, so a big tree containing a small accepted one
+        # slipped through -> tree drawn inside a tree).
+        small = _det(100, 100, 3)
+        big = _det(101, 100, 12)  # engulfs `small`
+        assert len(filter_placements([small, big], [])) == 1  # small first
+        assert len(filter_placements([big, small], [])) == 1  # big first
+
     def test_tree_overlap_threshold_tunable(self):
         # Two r=30 canopies 30px apart overlap ~39%. The default tree-tree
         # threshold (0.30, spec §7) suppresses the second; relaxing to 0.60

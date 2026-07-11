@@ -304,12 +304,18 @@ def filter_placements(
             ):
                 continue
 
-        # Rule 2: tree-tree overlap against already-accepted canopies
+        # Rule 2: tree-tree overlap against already-accepted canopies.
+        # Overlap is measured against the SMALLER of the two canopies, not
+        # the incoming one -- otherwise a big crown fully containing a small
+        # already-accepted one passes (intersection/big_area stays small),
+        # leaving a tree drawn inside a tree. Using min() makes the test
+        # order-independent: full containment always reads as ~100%.
         if accepted_canopies:
             tree_index = STRtree(accepted_canopies)
             candidates = tree_index.query(canopy)
             if any(
-                canopy.intersection(accepted_canopies[i]).area / canopy.area > tree_overlap_threshold
+                canopy.intersection(accepted_canopies[i]).area
+                / min(canopy.area, accepted_canopies[i].area) > tree_overlap_threshold
                 for i in candidates
             ):
                 continue
