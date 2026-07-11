@@ -31,7 +31,8 @@ def _export(tmp_path, placements, scale=0.3, origin=(500, 400)):
     return ezdxf.readfile(out)
 
 
-def _block_extent(doc, name="TREE_0"):
+def _block_extent(doc):
+    name = next(b.name for b in doc.blocks if b.name.startswith("TREE_"))
     xs, ys = [], []
     for e in doc.blocks.get(name):
         if e.dxftype() == "LWPOLYLINE":

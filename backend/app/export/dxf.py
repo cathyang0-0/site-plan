@@ -120,9 +120,16 @@ def export_dxf(
         return (px_coord[0] * scale_m_per_px, -px_coord[1] * scale_m_per_px)
 
     # --- Define tree blocks ---
+    # Block names carry a per-export random token. Rhino (and some other
+    # CAD apps) key block definitions by name across imports into one
+    # document: re-importing a regenerated plan whose block is still called
+    # "TREE_0" makes Rhino reuse the FIRST "TREE_0" it saw and ignore the
+    # new definition -- so a corrected symbol silently renders with the
+    # stale one. A unique suffix per export sidesteps that entirely.
+    export_token = f"{random.randrange(16**6):06X}"
     block_names = []
     for i, curves in enumerate(tree_block_curves):
-        block_name = f"TREE_{i}"
+        block_name = f"TREE_{i}_{export_token}"
         blk = doc.blocks.new(name=block_name)
         for curve_pts in curves:
             pts_m = [block_px_to_m(pt) for pt in curve_pts]
