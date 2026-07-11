@@ -314,12 +314,16 @@ Detection will miss trees (especially in dense, low-contrast canopy) and occasio
 
 Manual edits are applied to the tree placement list before overlap filtering and export, so suppression rules and roof masking treat manual trees exactly like detected ones. Edits persist within the session.
 
-**Canopy size controls (two sliders):** the detector's crown size is not a reliable absolute measurement (see §4c), so the tree layer exposes two global sliders, applied live to the preview:
+**Canopy size controls (two sliders):** the detector's crown size is not a reliable absolute measurement (see §4c), so the tree layer exposes two global sliders, applied live to the preview.
 
-- **Average tree size** — a multiplier on all crown radii (`crown_size_scale`, default 1.0). Scales the whole canopy up or down without moving any tree; ~1.4–1.5 typically reads well on a mature suburb.
-- **Tree size variance** — spread of a random per-tree size jitter around that average, so a run of trees doesn't render as identical stamps. 0 = all trees at the average size; higher = more natural variation.
+Both operate on each tree's own detected size relative to the mean, so the detected size *distribution* (which trees are bigger/smaller than their neighbors) is preserved — only its center and spread are reshaped:
 
-Both are pure render-time transforms on the existing placements (no re-inference), so the preview updates instantly.
+1. Compute the mean detected crown radius across all trees, `mean_r`.
+2. Each tree keeps its signed deviation from that mean, `d_i = r_i − mean_r`.
+3. **Tree size variance** slider `v` (default 1.0) scales each deviation: `r'_i = mean_r + v · d_i`. `v = 0` collapses every tree to the mean (uniform size); `v = 1` preserves the detected spread; `v > 1` exaggerates it (big trees bigger, small trees smaller).
+4. **Average tree size** slider (`crown_size_scale`, default 1.0) then scales the whole result: `r''_i = crown_size_scale · r'_i`, moving the distribution's center without changing its relative spread.
+
+The two are independent: average moves the center, variance expands/contracts around it. Both are pure render-time transforms on existing placements (no re-inference), so the preview updates instantly.
 
 ### Step 5 — Style
 User sees a thumbnail preview and adjusts line weights, colors, opacity, and hatch parameters per layer. Preview (SVG) updates live. (can be a simplified standard drawing that has all the components, doesn't ave to match the actual site plan generated) 
