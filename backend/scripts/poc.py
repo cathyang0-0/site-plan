@@ -164,15 +164,25 @@ def real_tree_detections(
     scale_m_per_px: float,
     stand_fill: bool = True,
     crown_size_scale: float = 1.0,
+    size_variance: float = 1.0,
 ) -> list[dict]:
     """Run real DeepForest detection + dense-stand fill. Returns raw
     detections (pre overlap-filtering) so callers can cross-check other
     modules against them before suppression runs."""
-    from app.pipeline.trees import detect_trees, fill_dense_stands, MAX_CANOPY_RADIUS_M
+    from app.pipeline.trees import (
+        detect_trees, apply_size_transform, fill_dense_stands, MAX_CANOPY_RADIUS_M,
+    )
 
-    detections = detect_trees(image, scale_m_per_px, crown_size_scale=crown_size_scale)
+    detections = detect_trees(image, scale_m_per_px)
     n_stands = sum(1 for d in detections if d.get("stand"))
     print(f"  Raw detections: {len(detections)} ({n_stands} dense-stand boxes)")
+    # Reshape rendered crown sizes (variance then average) before stand fill,
+    # so the synthetic fill picks up the transformed size distribution.
+    apply_size_transform(
+        detections,
+        crown_size_scale=crown_size_scale,
+        size_variance=size_variance,
+    )
     if stand_fill:
         # fill_dense_stands puts synthetic trees AFTER real detections so
         # filter_placements gives the real ones priority where they overlap.
@@ -213,9 +223,16 @@ def main():
                         help="Draw oversized dense-canopy detections as single max-size "
                              "trees instead of filling them with synthetic stands")
     parser.add_argument("--crown-scale", type=float, default=1.0,
-                        help="Multiplier on detected crown size (default 1.0). Detected "
-                             "size skews small for a context plan; try ~1.4 for larger, "
-                             "more prominent canopy. Positions are unaffected.")
+                        help="'Average size' multiplier on detected crown size (default "
+                             "1.0). Detected size skews small for a context plan; try "
+                             "~1.4 for larger, more prominent canopy. Positions are "
+                             "unaffected.")
+    parser.add_argument("--size-variance", type=float, default=1.0,
+                        help="Crown size-variance factor (default 1.0). Scales each "
+                             "tree's deviation from the mean crown size: 0 makes every "
+                             "crown uniform, 1 keeps the detected spread, >1 exaggerates "
+                             "it (big trees bigger, small trees smaller). Positions are "
+                             "unaffected.")
     parser.add_argument("--real-buildings", action="store_true",
                         help="Run real SAM2 zero-shot building detection (downloads the "
                              "checkpoint on first run; several minutes of inference)")
@@ -256,6 +273,7 @@ def main():
                 image, args.scale,
                 stand_fill=not args.no_stand_fill,
                 crown_size_scale=args.crown_scale,
+                size_variance=args.size_variance,
             )
         if args.footprint_buildings:
             print("Fetching building footprints (Overture Maps)...")

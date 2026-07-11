@@ -6,7 +6,12 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.pipeline.trees import filter_placements, fill_dense_stands
+from app.pipeline.trees import (
+    filter_placements,
+    fill_dense_stands,
+    apply_size_transform,
+    MIN_CANOPY_RADIUS_M,
+)
 
 
 def _det(x, y, r):
@@ -151,3 +156,77 @@ class TestFillDenseStands:
         dets = [_stand(500, 500, 150, 150)]
         assert fill_dense_stands(dets, 0.1, seed=1) == fill_dense_stands(dets, 0.1, seed=1)
         assert fill_dense_stands(dets, 0.1, seed=1) != fill_dense_stands(dets, 0.1, seed=2)
+
+
+class TestApplySizeTransform:
+    # _det(x, y, r) -> radius_px = r, radius_m = r * 0.1. So radii 100/150/250
+    # give radius_m 10/15/25 etc., all comfortably above MIN_CANOPY_RADIUS_M.
+
+    def test_variance_zero_collapses_to_mean(self):
+        # radius_m 5, 15, 25 -> mean 15. v=0 -> every crown equals the mean.
+        dets = [_det(0, 0, 50), _det(0, 0, 150), _det(0, 0, 250)]
+        apply_size_transform(dets, size_variance=0.0)
+        assert all(d["radius_m"] == pytest.approx(15.0) for d in dets)
+        # radius_px moves with radius_m (shared per-detection scale 0.1)
+        assert all(d["radius_px"] == pytest.approx(150.0) for d in dets)
+
+    def test_variance_one_is_unchanged(self):
+        dets = [_det(0, 0, 100), _det(0, 0, 150), _det(0, 0, 200)]
+        before_m = [d["radius_m"] for d in dets]
+        before_px = [d["radius_px"] for d in dets]
+        apply_size_transform(dets, size_variance=1.0)
+        assert [d["radius_m"] for d in dets] == pytest.approx(before_m)
+        assert [d["radius_px"] for d in dets] == pytest.approx(before_px)
+
+    def test_defaults_are_noop(self):
+        dets = [_det(0, 0, 100), _det(0, 0, 200)]
+        before = [d["radius_m"] for d in dets]
+        apply_size_transform(dets)
+        assert [d["radius_m"] for d in dets] == pytest.approx(before)
+
+    def test_variance_two_doubles_deviations(self):
+        # radius_m 10, 15, 20 -> mean 15, deviations -5, 0, +5.
+        # v=2 doubles them: 5, 15, 25 (none hit the floor).
+        dets = [_det(0, 0, 100), _det(0, 0, 150), _det(0, 0, 200)]
+        apply_size_transform(dets, size_variance=2.0)
+        assert [d["radius_m"] for d in dets] == pytest.approx([5.0, 15.0, 25.0])
+
+    def test_floor_clamps_small_crown(self):
+        # radius_m 2, 15 -> mean 8.5. v=3 sends the small one to
+        # 8.5 + 3*(-6.5) = -11, which must clamp to MIN_CANOPY_RADIUS_M.
+        dets = [_det(0, 0, 20), _det(0, 0, 150)]
+        apply_size_transform(dets, size_variance=3.0)
+        assert dets[0]["radius_m"] == pytest.approx(MIN_CANOPY_RADIUS_M)
+        assert dets[1]["radius_m"] == pytest.approx(28.0)
+
+    def test_crown_scale_multiplies_whole_result(self):
+        # v=1 (spread unchanged), average x2 -> every radius doubles.
+        dets = [_det(0, 0, 100), _det(0, 0, 200)]
+        apply_size_transform(dets, crown_size_scale=2.0)
+        assert [d["radius_m"] for d in dets] == pytest.approx([20.0, 40.0])
+
+    def test_floor_applies_before_average_scale(self):
+        # Floor acts on the post-variance radius, THEN average scales: the
+        # clamped crown ends at MIN * crown_size_scale, not MIN.
+        dets = [_det(0, 0, 20), _det(0, 0, 150)]  # radius_m 2, 15; mean 8.5
+        apply_size_transform(dets, crown_size_scale=2.0, size_variance=3.0)
+        assert dets[0]["radius_m"] == pytest.approx(MIN_CANOPY_RADIUS_M * 2.0)
+
+    def test_stands_excluded_and_passed_through(self):
+        stand = _stand(0, 0, 300, 300)  # radius_m 30, flagged stand
+        dets = [_det(0, 0, 100), _det(0, 0, 200), stand]  # singles mean 15
+        apply_size_transform(dets, size_variance=0.0)
+        assert dets[0]["radius_m"] == pytest.approx(15.0)
+        assert dets[1]["radius_m"] == pytest.approx(15.0)
+        # stand untouched: mean computed from singles only, box left as-is
+        assert stand["radius_m"] == pytest.approx(30.0)
+        assert stand["radius_px"] == pytest.approx(300.0)
+        assert stand.get("stand") is True
+
+    def test_empty_list(self):
+        assert apply_size_transform([]) == []
+
+    def test_only_stands_passthrough(self):
+        dets = [_stand(0, 0, 300, 300)]
+        apply_size_transform(dets, size_variance=0.0, crown_size_scale=2.0)
+        assert dets[0]["radius_m"] == pytest.approx(30.0)

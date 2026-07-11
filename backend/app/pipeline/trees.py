@@ -50,21 +50,20 @@ STAND_FILL_MIN_RADIUS_M = 3.0      # fill crowns are forest trees, not shrubs; t
 def detect_trees(
     image: Image.Image,
     scale_m_per_px: float,
-    crown_size_scale: float = 1.0,
 ) -> list[dict]:
     """
-    Detect individual tree canopies.
+    Detect individual tree canopies at their raw detected size.
 
-    Args:
-        crown_size_scale: multiplier on every detected crown radius. The
-            detector's box size is NOT a reliable absolute canopy
-            measurement -- it reflects image resolution relative to the
-            model's training GSD, and DeepForest's median estimate skews
-            small for a context plan (e.g. ~7 m diameter on a mature
-            suburb where the drafter wants ~10-12 m). Detection gives
-            reliable tree *positions*; this scales the rendered *size* to
-            taste. Applied before the min-size floor and stand cutoff, so
-            scaling up correctly turns big merged crowns into stands.
+    The detector's box size is NOT a reliable absolute canopy measurement
+    -- it reflects image resolution relative to the model's training GSD,
+    and DeepForest's median estimate skews small for a context plan (e.g.
+    ~7 m diameter on a mature suburb where the drafter wants ~10-12 m).
+    Detection gives reliable tree *positions*; the rendered *size* is
+    reshaped afterwards by apply_size_transform (the "average size" and
+    "size variance" controls, spec §6 Step 4.5). Keeping those controls out
+    of detection means stand classification (the > MAX_CANOPY_RADIUS_M
+    cutoff below) stays a stable detection-time decision rather than
+    shifting live as the size sliders move.
 
     Returns:
         List of dicts with pixel centroid + radius, and real-world radius in meters.
@@ -100,8 +99,8 @@ def detect_trees(
     for _, row in boxes.iterrows():
         x_center = (row["xmin"] + row["xmax"]) / 2
         y_center = (row["ymin"] + row["ymax"]) / 2
-        radius_px = (row["xmax"] - row["xmin"]) / 2 * crown_size_scale
-        ry_px = (row["ymax"] - row["ymin"]) / 2 * crown_size_scale
+        radius_px = (row["xmax"] - row["xmin"]) / 2
+        ry_px = (row["ymax"] - row["ymin"]) / 2
         radius_m = radius_px * scale_m_per_px
 
         # An oversized box is several merged crowns in dense canopy, not one
@@ -128,6 +127,63 @@ def detect_trees(
             "radius_px": radius_px,
             "radius_m": radius_m,
         })
+
+    return detections
+
+
+def apply_size_transform(
+    detections: list[dict],
+    crown_size_scale: float = 1.0,
+    size_variance: float = 1.0,
+) -> list[dict]:
+    """
+    Reshape the crown-size distribution of detected trees (spec §6 Step 4.5).
+
+    Two independent, render-time controls, applied in spec order (variance
+    first, then average) to every non-stand detection:
+
+      1. mean_r = mean detected crown radius across all non-stand trees.
+      2. d_i    = r_i - mean_r          (each tree's signed deviation)
+      3. size_variance `v` scales the deviation: r'_i = mean_r + v * d_i.
+         v=0 collapses every crown to the mean (uniform size); v=1 preserves
+         the detected spread; v>1 exaggerates it (big trees bigger, small
+         trees smaller). r'_i is floored at MIN_CANOPY_RADIUS_M so v>1 can't
+         drive a small crown to zero/negative radius.
+      4. crown_size_scale (the "average size" multiplier) then scales the
+         whole result: r''_i = crown_size_scale * r'_i, moving the
+         distribution's center without changing its relative spread.
+
+    Because scaling and the mean/deviation split are both linear, the two
+    controls commute; applying variance before average matches the spec and
+    keeps the floor acting on the pre-average radius.
+
+    Stand detections (oversized merged-crown boxes bound for
+    fill_dense_stands) are excluded from mean_r and passed through
+    unchanged: a stand box is a fill *region*, not a rendered crown, so the
+    per-crown controls don't apply to it. crown_size_scale still reaches the
+    synthetic stand fill indirectly -- fill_dense_stands sizes its trees
+    from the 75th percentile of these (now transformed) singles.
+
+    Positions are untouched. Mutates each non-stand detection's radius_m and
+    radius_px in place and returns the same list. With the defaults
+    (1.0, 1.0) this is a no-op for crowns already at or above the floor.
+    """
+    singles = [d for d in detections if not d.get("stand")]
+    if not singles:
+        return detections
+
+    mean_r = sum(d["radius_m"] for d in singles) / len(singles)
+
+    for d in singles:
+        r_m = d["radius_m"]
+        r_prime = mean_r + size_variance * (r_m - mean_r)
+        r_prime = max(r_prime, MIN_CANOPY_RADIUS_M)   # floor before average
+        r_final = crown_size_scale * r_prime
+        # radius_m and radius_px share a fixed per-detection scale; move
+        # radius_px by the same factor rather than re-deriving scale_m_per_px.
+        if r_m > 0:
+            d["radius_px"] *= r_final / r_m
+        d["radius_m"] = r_final
 
     return detections
 
