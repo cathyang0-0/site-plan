@@ -163,13 +163,14 @@ def real_tree_detections(
     image: Image.Image,
     scale_m_per_px: float,
     stand_fill: bool = True,
+    crown_size_scale: float = 1.0,
 ) -> list[dict]:
     """Run real DeepForest detection + dense-stand fill. Returns raw
     detections (pre overlap-filtering) so callers can cross-check other
     modules against them before suppression runs."""
     from app.pipeline.trees import detect_trees, fill_dense_stands, MAX_CANOPY_RADIUS_M
 
-    detections = detect_trees(image, scale_m_per_px)
+    detections = detect_trees(image, scale_m_per_px, crown_size_scale=crown_size_scale)
     n_stands = sum(1 for d in detections if d.get("stand"))
     print(f"  Raw detections: {len(detections)} ({n_stands} dense-stand boxes)")
     if stand_fill:
@@ -211,6 +212,10 @@ def main():
     parser.add_argument("--no-stand-fill", action="store_true",
                         help="Draw oversized dense-canopy detections as single max-size "
                              "trees instead of filling them with synthetic stands")
+    parser.add_argument("--crown-scale", type=float, default=1.0,
+                        help="Multiplier on detected crown size (default 1.0). Detected "
+                             "size skews small for a context plan; try ~1.4 for larger, "
+                             "more prominent canopy. Positions are unaffected.")
     parser.add_argument("--real-buildings", action="store_true",
                         help="Run real SAM2 zero-shot building detection (downloads the "
                              "checkpoint on first run; several minutes of inference)")
@@ -248,7 +253,9 @@ def main():
         if args.real_trees:
             print("Running real tree detection (DeepForest)...")
             detections = real_tree_detections(
-                image, args.scale, stand_fill=not args.no_stand_fill
+                image, args.scale,
+                stand_fill=not args.no_stand_fill,
+                crown_size_scale=args.crown_scale,
             )
         if args.footprint_buildings:
             print("Fetching building footprints (Overture Maps)...")

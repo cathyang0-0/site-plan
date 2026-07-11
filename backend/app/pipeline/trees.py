@@ -47,9 +47,24 @@ STAND_FILL_MIN_RADIUS_M = 3.0      # fill crowns are forest trees, not shrubs; t
                                    # trees), so floor the fill size at a mature crown
 
 
-def detect_trees(image: Image.Image, scale_m_per_px: float) -> list[dict]:
+def detect_trees(
+    image: Image.Image,
+    scale_m_per_px: float,
+    crown_size_scale: float = 1.0,
+) -> list[dict]:
     """
     Detect individual tree canopies.
+
+    Args:
+        crown_size_scale: multiplier on every detected crown radius. The
+            detector's box size is NOT a reliable absolute canopy
+            measurement -- it reflects image resolution relative to the
+            model's training GSD, and DeepForest's median estimate skews
+            small for a context plan (e.g. ~7 m diameter on a mature
+            suburb where the drafter wants ~10-12 m). Detection gives
+            reliable tree *positions*; this scales the rendered *size* to
+            taste. Applied before the min-size floor and stand cutoff, so
+            scaling up correctly turns big merged crowns into stands.
 
     Returns:
         List of dicts with pixel centroid + radius, and real-world radius in meters.
@@ -85,7 +100,8 @@ def detect_trees(image: Image.Image, scale_m_per_px: float) -> list[dict]:
     for _, row in boxes.iterrows():
         x_center = (row["xmin"] + row["xmax"]) / 2
         y_center = (row["ymin"] + row["ymax"]) / 2
-        radius_px = (row["xmax"] - row["xmin"]) / 2   # use width as diameter estimate
+        radius_px = (row["xmax"] - row["xmin"]) / 2 * crown_size_scale
+        ry_px = (row["ymax"] - row["ymin"]) / 2 * crown_size_scale
         radius_m = radius_px * scale_m_per_px
 
         # An oversized box is several merged crowns in dense canopy, not one
@@ -97,7 +113,7 @@ def detect_trees(image: Image.Image, scale_m_per_px: float) -> list[dict]:
                 "x_px": x_center,
                 "y_px": y_center,
                 "radius_px": radius_px,
-                "ry_px": (row["ymax"] - row["ymin"]) / 2,
+                "ry_px": ry_px,
                 "radius_m": radius_m,
                 "stand": True,
             })

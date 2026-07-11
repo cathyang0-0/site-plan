@@ -123,8 +123,9 @@ Alternative if DeepForest performs poorly on the target imagery style: SAM2 Auto
 **Post-processing:**
 1. NMS on overlapping detections (IoU threshold 0.4 — deliberately permissive: real forest crowns interlock, and a strict threshold blanks out dense stands)
 2. Extract centroid and radius from each bounding box
-3. Size handling: radius < 1.5 m enlarged to 1.5 m (keep small trees readable); radius > 10 m treated as a **dense stand** (merged crowns the detector can't separate) and filled with synthetic trees scattered across the box's ellipse — jittered spacing and sizes so the fill reads as a natural stand, not a pattern. Fill is strictly detection-led: only areas the model flagged as canopy are filled.
-4. Output: list of `(x, y, radius)` tuples in real-world coordinates
+3. **Crown-size caveat & control:** the detector gives reliable tree *positions*, but its box *size* is not a trustworthy absolute canopy measurement — it depends on image resolution relative to the model's training GSD, and DeepForest's median estimate skews small for a context plan (empirically ~7 m diameter on a mature suburb where a drafter wants ~10–12 m; verified stable across resampling, so not tunable via resolution). A global **crown-size multiplier** (`crown_size_scale`, default 1.0) scales rendered canopy to taste without touching positions; the per-tree manual resize tool (§6 Step 4.5) handles individual overrides.
+4. Size handling (after the multiplier): radius < 1.5 m enlarged to 1.5 m (keep small trees readable); radius > 10 m treated as a **dense stand** (merged crowns the detector can't separate) and filled with synthetic trees scattered across the box's ellipse — jittered spacing and sizes so the fill reads as a natural stand, not a pattern. Fill is strictly detection-led: only areas the model flagged as canopy are filled.
+5. Output: list of `(x, y, radius)` tuples in real-world coordinates
 
 **Layer name:** `TREES`
 
@@ -312,6 +313,13 @@ Detection will miss trees (especially in dense, low-contrast canopy) and occasio
 - **Erase:** remove trees — individually (click) or by brushing an area. Works on detected, stand-filled, and manually plotted trees alike.
 
 Manual edits are applied to the tree placement list before overlap filtering and export, so suppression rules and roof masking treat manual trees exactly like detected ones. Edits persist within the session.
+
+**Canopy size controls (two sliders):** the detector's crown size is not a reliable absolute measurement (see §4c), so the tree layer exposes two global sliders, applied live to the preview:
+
+- **Average tree size** — a multiplier on all crown radii (`crown_size_scale`, default 1.0). Scales the whole canopy up or down without moving any tree; ~1.4–1.5 typically reads well on a mature suburb.
+- **Tree size variance** — spread of a random per-tree size jitter around that average, so a run of trees doesn't render as identical stamps. 0 = all trees at the average size; higher = more natural variation.
+
+Both are pure render-time transforms on the existing placements (no re-inference), so the preview updates instantly.
 
 ### Step 5 — Style
 User sees a thumbnail preview and adjusts line weights, colors, opacity, and hatch parameters per layer. Preview (SVG) updates live. (can be a simplified standard drawing that has all the components, doesn't ave to match the actual site plan generated) 
