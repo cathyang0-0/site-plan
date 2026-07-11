@@ -105,13 +105,27 @@ def export_dxf(
         holes = [[px_to_m(pt) for pt in ring.coords] for ring in polygon.interiors]
         return exterior, holes
 
+    def block_px_to_m(px_coord):
+        """Scale a block's local symbol coordinate from pixels to meters.
+
+        A block definition is LOCAL geometry, relative to its own origin --
+        it must be scaled but NOT translated by the image origin the way
+        px_to_m does. (Running block curves through px_to_m offsets the
+        symbol to the site corner; at insert time `scale * that_offset`
+        then flings each tree far from its true position, varying per tree
+        as the scale varies -- the classic "trees scattered everywhere"
+        bug.) The Y sign is flipped to match px_to_m's axis convention so
+        the symbol isn't mirrored relative to world geometry.
+        """
+        return (px_coord[0] * scale_m_per_px, -px_coord[1] * scale_m_per_px)
+
     # --- Define tree blocks ---
     block_names = []
     for i, curves in enumerate(tree_block_curves):
         block_name = f"TREE_{i}"
         blk = doc.blocks.new(name=block_name)
         for curve_pts in curves:
-            pts_m = [px_to_m(pt) for pt in curve_pts]
+            pts_m = [block_px_to_m(pt) for pt in curve_pts]
             blk.add_lwpolyline(pts_m, dxfattribs={"layer": "TREES"})
         block_names.append(block_name)
 
