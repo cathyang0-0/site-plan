@@ -157,6 +157,14 @@ def apply_size_transform(
     controls commute; applying variance before average matches the spec and
     keeps the floor acting on the pre-average radius.
 
+    KNOWN LIMITATION (intentionally not addressed yet): the floor is applied
+    to r'_i *before* crown_size_scale, so with crown_size_scale < 1 a floored
+    crown ends at MIN_CANOPY_RADIUS_M * crown_size_scale -- below the readable
+    minimum. Harmless while the "average size" control is only used to enlarge
+    (>= 1); if it's ever allowed below 1, move the floor after the average
+    scale. (The floor also makes the two controls not strictly commute -- the
+    "commute" note above holds only in the unclamped region.)
+
     Stand detections (oversized merged-crown boxes bound for
     fill_dense_stands) are excluded from mean_r and passed through
     unchanged: a stand box is a fill *region*, not a rendered crown, so the

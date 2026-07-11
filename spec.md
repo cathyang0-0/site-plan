@@ -325,6 +325,8 @@ Both operate on each tree's own detected size relative to the mean, so the detec
 
 The two are independent: average moves the center, variance expands/contracts around it. Both are pure render-time transforms on existing placements (no re-inference), so the preview updates instantly.
 
+> **Known limitation (not yet addressed):** the readable-size floor (`MIN_CANOPY_RADIUS_M`) is applied to `r'_i` *before* the average multiplier. So with an **average size below 1.0**, a floored small crown ends at `MIN_CANOPY_RADIUS_M · crown_size_scale`, i.e. *below* the intended readable minimum. This only bites when the average slider goes under 1× (an unusual setting — the control is normally used to enlarge). Left as-is for now; if the average slider is ever allowed below 1×, apply the floor after the average scale instead. A related side effect: at high variance the floor asymmetrically clamps small crowns, nudging the mean slightly upward, so "average size" isn't perfectly preserved when variance is large.
+
 ### Step 5 — Style
 User sees a thumbnail preview and adjusts line weights, colors, opacity, and hatch parameters per layer. Preview (SVG) updates live. (can be a simplified standard drawing that has all the components, doesn't ave to match the actual site plan generated) 
 
