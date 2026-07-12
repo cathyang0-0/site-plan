@@ -240,13 +240,17 @@ def main():
                         help="Fetch building footprints from Overture Maps instead of CV "
                              "detection (preferred when the image is georeferenced; "
                              "requires --bbox)")
+    parser.add_argument("--footprint-roads", action="store_true",
+                        help="Fetch road centerlines from Overture Maps (class-based "
+                             "width, nudged by a light CV pavement measurement); "
+                             "requires --bbox")
     parser.add_argument("--bbox", type=str, default=None,
                         help="Geographic extent of the image as WEST,SOUTH,EAST,NORTH "
                              "(lon/lat); the image must span exactly this bbox")
     args = parser.parse_args()
 
-    if args.footprint_buildings and not args.bbox:
-        parser.error("--footprint-buildings requires --bbox")
+    if (args.footprint_buildings or args.footprint_roads) and not args.bbox:
+        parser.error("--footprint-buildings/--footprint-roads require --bbox")
 
     image_path = Path(args.image)
     if not image_path.exists():
@@ -260,13 +264,21 @@ def main():
 
     origin_px = (img_w // 2, img_h // 2)
 
-    attribution = None
-    if args.real_trees or args.real_buildings or args.footprint_buildings:
+    attributions = []
+    if (args.real_trees or args.real_buildings or args.footprint_buildings
+            or args.footprint_roads):
         buildings = []
         roads = []
         land_types = []
         tree_placements = []
         detections = []
+        if args.footprint_roads:
+            print("Fetching road centerlines (Overture Maps)...")
+            from app.pipeline.roads import build_roads, ATTRIBUTION as ROAD_ATTR
+            west, south, east, north = (float(v) for v in args.bbox.split(","))
+            roads = build_roads(image, west, south, east, north, args.scale)
+            attributions.append(ROAD_ATTR)
+            print(f"  Roads fetched: {len(roads)}")
         if args.real_trees:
             print("Running real tree detection (DeepForest)...")
             detections = real_tree_detections(
@@ -285,7 +297,7 @@ def main():
             buildings = footprints_to_pixels(
                 geo_polys, west, south, east, north, img_w, img_h
             )
-            attribution = ATTRIBUTION
+            attributions.append(ATTRIBUTION)
             print(f"  Footprints fetched: {len(buildings)}")
         elif args.real_buildings:
             print("Running real building detection (SAM2 zero-shot)...")
@@ -335,7 +347,7 @@ def main():
         style=style,
         scale_m_per_px=args.scale,
         origin_px=origin_px,
-        attribution=attribution,
+        attribution="  •  ".join(attributions) if attributions else None,
     )
 
     print(f"Done. Open {output_path} in Rhino, AutoCAD, or Vectorworks to check the output.")

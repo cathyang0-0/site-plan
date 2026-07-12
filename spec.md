@@ -92,6 +92,12 @@ Recommended approach: pretrain on SpaceNet 2, fine-tune on INRIA. Optionally use
 
 **Goal:** Smooth continuous NURBS curves representing road centerlines or edge pairs. Visually connected road segments must be a single curve entity — no broken lines.
 
+**Primary source — Overture Maps road centerlines (no CV):** for georeferenced sites, roads come from the Overture transportation "segment" theme via a per-bbox GeoParquet query (~1s, same mechanism as footprints §4a). They arrive already as what the CV post-processing below tried to reconstruct: clean, connected centerlines (one entity per road), correct at intersections, classified by type (`residential` / `secondary` / `service` / `footway` / …). This removes the entire segment→skeletonize→graph→trace→spline chain. License: ODbL (attribution stamped at export). Validated 2026-07: 127 accurate centerlines for the Alamo Heights test bbox.
+
+**Road width (hybrid, class prior + light CV):** Overture gives road *class* but not a measured width. Each road gets a class-based prior width (`roads.CLASS_WIDTH_M`, following the "recommended by type" values below), then a lightweight CV measurement nudges it toward the actual pavement seen in the image: perpendicular samples along the centerline step outward until the color diverges from the centerline (pavement→grass/roof), and the median half-widths give an observed width. The observed value is clamped to CV_CLAMP × the class prior and mixed in at weight `CV_WIDTH_WEIGHT` (default 0.5), so unusually wide/narrow roads adapt but a noisy read can't blow up — the class prior stays the anchor. Samples whose centerline pixel is vegetation (tree overhang / grass median) are skipped, so under-canopy roads fall back to the prior. The resulting `width_px` feeds the exporter's pavement-corridor + fillet logic (`_build_road_network`), which already merges corridors and rounds intersections.
+
+**CV fallback (below) applies** to non-georeferenced imagery (v2 image upload) or regions missing from the data.
+
 **Model:** Fine-tuned DeepLabV3+ on road segmentation. Training data options:
 - **SpaceNet 3 Road Network** — road mask labels with good coverage
 - **Massachusetts Roads Dataset** — aerial road labels, well-established benchmark
