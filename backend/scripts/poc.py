@@ -198,6 +198,31 @@ def real_tree_detections(
     return detections
 
 
+def _rasterize_polygons(polygons, img_w: int, img_h: int):
+    """Fill shapely Polygons into a uint8 mask (buildings -> exclusion mask
+    for land-type detection)."""
+    import cv2
+    import numpy as np
+    mask = np.zeros((img_h, img_w), dtype=np.uint8)
+    for poly in polygons:
+        pts = np.array(poly.exterior.coords, dtype=np.int32)
+        cv2.fillPoly(mask, [pts], 255)
+    return mask
+
+
+def _rasterize_roads(roads, img_w: int, img_h: int):
+    """Draw road centerlines at their width into a uint8 mask (road exclusion
+    mask for land-type detection)."""
+    import cv2
+    import numpy as np
+    mask = np.zeros((img_h, img_w), dtype=np.uint8)
+    for road in roads:
+        pts = np.array(road["line"].coords, dtype=np.int32)
+        thickness = max(1, int(round(road.get("width_px", 4))))
+        cv2.polylines(mask, [pts], isClosed=False, color=255, thickness=thickness)
+    return mask
+
+
 def detections_to_placements(detections: list[dict], n_blocks: int = 1) -> list[dict]:
     """Convert accepted detections into tree block placements."""
     rng = random.Random(0)
@@ -233,6 +258,10 @@ def main():
                              "crown uniform, 1 keeps the detected spread, >1 exaggerates "
                              "it (big trees bigger, small trees smaller). Positions are "
                              "unaffected.")
+    parser.add_argument("--land-types", action="store_true",
+                        help="Detect land-cover regions (water/vegetation/bare/paved) by "
+                             "unsupervised clustering and hatch them; buildings and roads "
+                             "found in this run are masked out")
     parser.add_argument("--real-buildings", action="store_true",
                         help="Run real SAM2 zero-shot building detection (downloads the "
                              "checkpoint on first run; several minutes of inference)")
@@ -266,7 +295,7 @@ def main():
 
     attributions = []
     if (args.real_trees or args.real_buildings or args.footprint_buildings
-            or args.footprint_roads):
+            or args.footprint_roads or args.land_types):
         buildings = []
         roads = []
         land_types = []
@@ -316,6 +345,18 @@ def main():
             accepted = filter_placements(detections, building_polygons=buildings)
             tree_placements = detections_to_placements(accepted)
             print(f"  Trees after overlap filtering: {len(tree_placements)}")
+        if args.land_types:
+            print("Detecting land-cover types (unsupervised clustering)...")
+            from app.pipeline.landtypes import detect_land_types, default_hatch_style
+            b_mask = _rasterize_polygons(buildings, img_w, img_h)
+            r_mask = _rasterize_roads(roads, img_w, img_h)
+            detected = detect_land_types(image, b_mask, r_mask)
+            land_types = [
+                {"label": d["label"], "polygons": d["polygons"],
+                 "style": default_hatch_style(d["label"])}
+                for d in detected
+            ]
+            print(f"  Land types: {', '.join(d['label'] for d in land_types)}")
     else:
         print("Generating placeholder geometry (real CV models not yet wired up)...")
         buildings = placeholder_buildings(img_w, img_h)

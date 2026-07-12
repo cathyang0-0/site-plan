@@ -139,7 +139,9 @@ Alternative if DeepForest performs poorly on the target imagery style: SAM2 Auto
 
 **Goal:** Identify distinct ground-cover types (farmland, grass, hardscape, gravel, water, etc.) as separate filled regions that the user can assign hatches to or discard.
 
-**Approach — unsupervised texture segmentation:**
+**Implemented (POC):** SLIC superpixels → per-superpixel **color-forward** features `[R, G, B, excess-green, blueness, saturation, value, texture]` → standardized k-means (k=4) → **semantic label assignment** (each arbitrary cluster is mapped to water/vegetation/bare/paved by its mean color/texture, since k-means ids carry no meaning) → per-cluster MultiPolygon → default hatch per label (§5 table). Validated 2026-07 on the lakeside test image: water/forest/bare-field/paved separate correctly. The original Gabor(4×6)+LBP feature plan below was replaced — texture-heavy features let noise dominate and mixed water with forest; color leads, one texture channel supports. Not yet implemented from the fuller plan: <50 m² region merging (step 5) and B-spline boundary smoothing (step 7); regions currently export as simplified polygon boundaries.
+
+**Approach — unsupervised texture segmentation (fuller target):**
 1. Mask out building footprints and detected road areas from the aerial image
 2. Extract texture features per pixel: Gabor filter bank (4 scales × 6 orientations), color histograms in HSV space, LBP (Local Binary Patterns)
 3. Spatial smoothing (superpixel pre-segmentation via SLIC to reduce noise)

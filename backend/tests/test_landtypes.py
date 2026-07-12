@@ -14,6 +14,7 @@ from app.pipeline.landtypes import (
     _extract_superpixel_features,
     detect_land_types,
     N_CLUSTERS,
+    CLUSTER_LABELS,
 )
 
 
@@ -107,13 +108,13 @@ class TestExtractSuperpixelFeatures:
         assert isinstance(valid_ids, list)
 
     def test_feature_dimension(self):
-        # RGB(3) + LBP(1) + Gabor(8) = 12
+        # Color-forward vector: [R, G, B, exg, blueness, sat, value, texture] = 8
         img_np = np.random.randint(0, 255, (100, 100, 3), dtype=np.uint8)
         from skimage.segmentation import slic
         segments = slic(img_np, n_segments=20, compactness=10, sigma=1, start_label=0)
         exclude = np.zeros((100, 100), dtype=np.uint8)
         features, _ = _extract_superpixel_features(img_np, segments, exclude)
-        assert features.shape[1] == 12
+        assert features.shape[1] == 8
 
     def test_excluded_superpixels_skipped(self):
         img_np = np.random.randint(0, 255, (100, 100, 3), dtype=np.uint8)
@@ -135,12 +136,26 @@ class TestExtractSuperpixelFeatures:
 
 
 class TestDetectLandTypes:
-    def test_returns_n_clusters(self):
+    def test_four_color_regions_get_correct_labels(self):
+        # Four quadrants: blue water, green vegetation, gray pavement, brown
+        # bare earth. Each should cluster out and get its semantic label.
+        a = np.zeros((200, 200, 3), dtype=np.uint8)
+        a[:100, :100] = (30, 60, 200)    # water (blue)
+        a[:100, 100:] = (40, 150, 40)    # vegetation (green)
+        a[100:, :100] = (150, 150, 150)  # paved (gray)
+        a[100:, 100:] = (150, 110, 60)   # bare earth (brown)
+        img = Image.fromarray(a)
+        zero = np.zeros((200, 200), dtype=np.uint8)
+        results = detect_land_types(img, zero, zero)
+        labels = {r["label"] for r in results}
+        assert labels == set(CLUSTER_LABELS)  # all four, each mapped once
+
+    def test_drops_empty_clusters(self):
+        # A uniform image yields a single ground-cover region, not N_CLUSTERS.
         img = _white_image(200, 200)
-        building_mask = np.zeros((200, 200), dtype=np.uint8)
-        road_mask = np.zeros((200, 200), dtype=np.uint8)
-        results = detect_land_types(img, building_mask, road_mask)
-        assert len(results) == N_CLUSTERS
+        zero = np.zeros((200, 200), dtype=np.uint8)
+        results = detect_land_types(img, zero, zero)
+        assert 0 < len(results) <= N_CLUSTERS
 
     def test_result_has_required_keys(self):
         img = _white_image(200, 200)
