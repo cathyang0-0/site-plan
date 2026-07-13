@@ -31,10 +31,10 @@ CLUSTER_LABELS = ["water", "vegetation", "bare earth / farmland", "paved / hards
 # in real-world-meter modelspace (the mm->scale auto-conversion isn't wired
 # yet, see dxf.py), tuned to read at typical site scales.
 DEFAULT_HATCH_STYLES = {
-    "water":                 {"hatch_type": "lines", "hatch_angle_deg": 0.0, "hatch_scale": 3.0},
-    "vegetation":            {"hatch_type": "dots", "hatch_scale": 2.0},
-    "bare earth / farmland": {"hatch_type": "lines", "hatch_angle_deg": 45.0, "hatch_scale": 4.5},
-    "paved / hardscape":     {"hatch_type": "crosshatch", "hatch_angle_deg": 45.0, "hatch_scale": 3.5},
+    "water":                 {"hatch_type": "lines", "hatch_angle_deg": 0.0, "hatch_scale": 1.0},
+    "vegetation":            {"hatch_type": "dots", "hatch_scale": 8.0},
+    "bare earth / farmland": {"hatch_type": "lines", "hatch_angle_deg": 45.0, "hatch_scale": 1.2},
+    "paved / hardscape":     {"hatch_type": "crosshatch", "hatch_angle_deg": 45.0, "hatch_scale": 1.2},
 }
 _FALLBACK_HATCH_STYLE = {"hatch_type": "lines", "hatch_angle_deg": 0.0, "hatch_scale": 3.0}
 
@@ -110,7 +110,7 @@ def detect_land_types(
     results = []
     for c in range(N_CLUSTERS):
         cluster_mask = (full_cluster_map == c).astype(np.uint8) * 255
-        polygons = _mask_to_multipolygon(cluster_mask, min_area_px=500)
+        polygons = _mask_to_multipolygon(cluster_mask)  # morph + simplify defaults
         if polygons.is_empty:
             continue
         if upscale != 1.0:  # scale polygons back to full-image coordinates
@@ -209,8 +209,32 @@ def _extract_superpixel_features(
     return np.array(features), valid_ids
 
 
-def _mask_to_multipolygon(mask: np.ndarray, min_area_px: int = 500) -> MultiPolygon:
-    """Convert binary mask to a MultiPolygon, filtering small regions."""
+def _mask_to_multipolygon(
+    mask: np.ndarray,
+    min_area_px: int = 1500,
+    morph_open_px: int = 3,
+    morph_close_px: int = 11,
+    simplify_tol_px: float = 2.5,
+) -> MultiPolygon:
+    """
+    Convert a binary cluster mask to a clean MultiPolygon.
+
+    Per-superpixel k-means labelling produces speckled, jagged regions (a
+    lawn shatters into islands wherever a cell flips class). This cleans them
+    in three cheap steps before/after contouring:
+      1. Morphological OPEN (remove speckle) then CLOSE (fill gaps and merge
+         neighbouring islands into one region) -- the main de-fragmenter.
+      2. Area filter -- drop what survives that is still tiny.
+      3. Douglas-Peucker simplify -- collapse the pixel-staircase boundary
+         into clean straight-ish edges instead of a jagged step outline.
+    """
+    if morph_open_px > 0:
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (morph_open_px, morph_open_px))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k)
+    if morph_close_px > 0:
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (morph_close_px, morph_close_px))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
+
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     polys = []
     for c in contours:
@@ -219,7 +243,17 @@ def _mask_to_multipolygon(mask: np.ndarray, min_area_px: int = 500) -> MultiPoly
         pts = c.squeeze()
         if pts.ndim < 2 or len(pts) < 4:
             continue
-        polys.append(Polygon(pts))
+        poly = Polygon(pts)
+        if simplify_tol_px > 0:
+            poly = poly.simplify(simplify_tol_px, preserve_topology=True)
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+        if poly.is_empty:
+            continue
+        if poly.geom_type == "Polygon":
+            polys.append(poly)
+        elif poly.geom_type == "MultiPolygon":
+            polys.extend(g for g in poly.geoms if not g.is_empty)
     return MultiPolygon(polys) if polys else MultiPolygon()
 
 
