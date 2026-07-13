@@ -20,6 +20,37 @@ from shapely.geometry import Polygon
 
 ATTRIBUTION = "Building footprints © OpenStreetMap contributors, Overture Maps Foundation (ODbL)"
 
+# Overture is a cloud GeoParquet query with no built-in timeout; a slow or
+# unreachable backend can otherwise hang the whole job indefinitely (observed:
+# a fetch stuck at 0% CPU for over an hour). A legitimate fetch is ~1-45s, so
+# this ceiling catches true hangs without tripping on normal slowness.
+OVERTURE_TIMEOUT_S = 90.0
+
+
+def fetch_with_timeout(fn, timeout_s: float, what: str):
+    """Run a blocking network fetch `fn` on a daemon thread and abandon it if
+    it exceeds `timeout_s`, raising TimeoutError. The orphaned thread can't be
+    force-killed but is daemonized so it never blocks process exit -- fail-fast
+    beats hanging forever. Signal-free, so it is safe inside server threads."""
+    import threading
+
+    box = {}
+
+    def run():
+        try:
+            box["result"] = fn()
+        except BaseException as exc:  # propagate the real fetch error to caller
+            box["error"] = exc
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(timeout_s)
+    if t.is_alive():
+        raise TimeoutError(f"{what} timed out after {timeout_s:.0f}s (Overture/network slow or unreachable)")
+    if "error" in box:
+        raise box["error"]
+    return box["result"]
+
 
 def fetch_building_footprints(
     west: float, south: float, east: float, north: float
@@ -29,24 +60,28 @@ def fetch_building_footprints(
 
     Returns polygons in lon/lat (WGS84) coordinates; convert with
     footprints_to_pixels for pipeline use. Multipolygons are split into
-    their parts. Requires network access.
+    their parts. Requires network access; raises TimeoutError past
+    OVERTURE_TIMEOUT_S.
     """
-    from overturemaps import core
+    def _fetch():
+        from overturemaps import core
 
-    reader = core.record_batch_reader("building", (west, south, east, north))
-    polygons: list[Polygon] = []
-    for batch in reader:
-        if batch.num_rows == 0:
-            continue
-        for wkb in batch.column("geometry").to_pylist():
-            if wkb is None:
+        reader = core.record_batch_reader("building", (west, south, east, north))
+        polygons: list[Polygon] = []
+        for batch in reader:
+            if batch.num_rows == 0:
                 continue
-            geom = shapely.from_wkb(wkb)
-            if geom.geom_type == "Polygon":
-                polygons.append(geom)
-            elif geom.geom_type == "MultiPolygon":
-                polygons.extend(geom.geoms)
-    return polygons
+            for wkb in batch.column("geometry").to_pylist():
+                if wkb is None:
+                    continue
+                geom = shapely.from_wkb(wkb)
+                if geom.geom_type == "Polygon":
+                    polygons.append(geom)
+                elif geom.geom_type == "MultiPolygon":
+                    polygons.extend(geom.geoms)
+        return polygons
+
+    return fetch_with_timeout(_fetch, OVERTURE_TIMEOUT_S, "building footprints fetch")
 
 
 def footprints_to_pixels(

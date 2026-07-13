@@ -42,3 +42,25 @@ class TestFootprintsToPixels:
 
     def test_empty_input(self):
         assert footprints_to_pixels([], **BBOX, img_w=1000, img_h=800) == []
+
+
+class TestFetchWithTimeout:
+    def test_returns_result_when_fast(self):
+        from app.pipeline.footprints import fetch_with_timeout
+        assert fetch_with_timeout(lambda: 42, 5.0, "x") == 42
+
+    def test_raises_timeout_when_slow(self):
+        import time
+        import pytest
+        from app.pipeline.footprints import fetch_with_timeout
+        with pytest.raises(TimeoutError):
+            fetch_with_timeout(lambda: time.sleep(5), 0.2, "slow fetch")
+
+    def test_propagates_fetch_error(self):
+        import pytest
+        from app.pipeline.footprints import fetch_with_timeout
+
+        def boom():
+            raise ValueError("network boom")
+        with pytest.raises(ValueError, match="network boom"):
+            fetch_with_timeout(boom, 5.0, "x")

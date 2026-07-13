@@ -59,28 +59,34 @@ def fetch_road_network(west: float, south: float, east: float, north: float) -> 
     Fetch road centerlines for a lon/lat bbox from Overture's segment theme.
 
     Returns list of {"line": lon/lat LineString, "class": str}, roads only
-    (rail and other subtypes dropped). Requires network access.
+    (rail and other subtypes dropped). Requires network access; raises
+    TimeoutError past OVERTURE_TIMEOUT_S.
     """
-    from overturemaps import core
+    from app.pipeline.footprints import fetch_with_timeout, OVERTURE_TIMEOUT_S
 
-    reader = core.record_batch_reader("segment", (west, south, east, north))
-    roads: list[dict] = []
-    for batch in reader:
-        if batch.num_rows == 0:
-            continue
-        geoms = batch.column("geometry").to_pylist()
-        subtypes = batch.column("subtype").to_pylist()
-        classes = batch.column("class").to_pylist()
-        for wkb, subtype, cls in zip(geoms, subtypes, classes):
-            if wkb is None or subtype != "road":
+    def _fetch():
+        from overturemaps import core
+
+        reader = core.record_batch_reader("segment", (west, south, east, north))
+        roads: list[dict] = []
+        for batch in reader:
+            if batch.num_rows == 0:
                 continue
-            geom = shapely.from_wkb(wkb)
-            if geom.geom_type == "LineString":
-                roads.append({"line": geom, "class": cls})
-            elif geom.geom_type == "MultiLineString":
-                for part in geom.geoms:
-                    roads.append({"line": part, "class": cls})
-    return roads
+            geoms = batch.column("geometry").to_pylist()
+            subtypes = batch.column("subtype").to_pylist()
+            classes = batch.column("class").to_pylist()
+            for wkb, subtype, cls in zip(geoms, subtypes, classes):
+                if wkb is None or subtype != "road":
+                    continue
+                geom = shapely.from_wkb(wkb)
+                if geom.geom_type == "LineString":
+                    roads.append({"line": geom, "class": cls})
+                elif geom.geom_type == "MultiLineString":
+                    for part in geom.geoms:
+                        roads.append({"line": part, "class": cls})
+        return roads
+
+    return fetch_with_timeout(_fetch, OVERTURE_TIMEOUT_S, "road network fetch")
 
 
 def roads_to_pixels(
