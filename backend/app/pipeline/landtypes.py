@@ -11,10 +11,16 @@ Approach:
 """
 import numpy as np
 from PIL import Image
+from shapely.affinity import scale as _affine_scale
 from shapely.geometry import MultiPolygon, Polygon
 from skimage.segmentation import slic
 from sklearn.cluster import KMeans
 import cv2
+
+# Land-cover clustering is a coarse regional segmentation -- full-resolution
+# aerial (multi-megapixel) is wasteful. Detect at reduced size, scale the
+# resulting polygons back. Also caps SLIC/k-means cost.
+MAX_DETECT_DIM = 1400
 
 N_CLUSTERS = 4
 CLUSTER_LABELS = ["water", "vegetation", "bare earth / farmland", "paved / hardscape"]
@@ -49,31 +55,48 @@ def detect_land_types(
 
     Returns:
         List of dicts per cluster:
-          - label: str (auto-named by cluster index)
-          - polygons: shapely MultiPolygon (pixel coords)
+          - label: str (semantic, from cluster color/texture)
+          - polygons: shapely MultiPolygon (pixel coords, full-image scale)
           - thumbnail: PIL.Image (representative crop)
           - cluster_id: int
     """
-    img_np = np.array(image)
+    img_full = np.asarray(image.convert("RGB"))
+    H, W = img_full.shape[:2]
+
+    # Downscale for detection (coarse segmentation; see MAX_DETECT_DIM). Masks
+    # use nearest-neighbour so they stay binary. Polygons are scaled back to
+    # full-image coordinates at the end via `upscale`.
+    detect_scale = min(1.0, MAX_DETECT_DIM / max(H, W))
+    if detect_scale < 1.0:
+        dw, dh = int(round(W * detect_scale)), int(round(H * detect_scale))
+        img_np = cv2.resize(img_full, (dw, dh), interpolation=cv2.INTER_AREA)
+        b_mask = cv2.resize(building_mask, (dw, dh), interpolation=cv2.INTER_NEAREST)
+        r_mask = cv2.resize(road_mask, (dw, dh), interpolation=cv2.INTER_NEAREST)
+    else:
+        img_np, b_mask, r_mask = img_full, building_mask, road_mask
     h, w = img_np.shape[:2]
+    upscale = W / w  # back to full-image pixels (uniform: dw/dh keep aspect)
 
-    # Combined exclusion mask (buildings + roads)
-    exclude = ((building_mask > 0.5) | (road_mask > 0.5)).astype(np.uint8)
+    exclude = ((b_mask > 0.5) | (r_mask > 0.5)).astype(np.uint8)
 
-    # Superpixel segmentation (SLIC) for spatial smoothing
-    segments = slic(img_np, n_segments=500, compactness=10, sigma=1, start_label=0)
+    # SLIC + k-means use OpenMP thread pools that DEADLOCK if PyTorch/MPS was
+    # initialized earlier in the same process (e.g. tree detection ran first).
+    # threadpool_limits(1) serializes them, which avoids the deadlock; the
+    # work is small (downscaled + only 500 superpixels) so single-threaded is
+    # fine. Verified: reproduces without the limit, runs clean with it.
+    try:
+        from threadpoolctl import threadpool_limits
+    except ImportError:                      # degrade gracefully
+        from contextlib import nullcontext as threadpool_limits  # type: ignore
 
-    # Extract per-superpixel features
-    features, valid_segment_ids = _extract_superpixel_features(img_np, segments, exclude)
-
-    if len(features) == 0:
-        return []
-
-    # Standardize features so no single channel dominates the distance, then
-    # cluster. (Features are already color-forward; see _extract_*.)
-    feat_std = (features - features.mean(axis=0)) / (features.std(axis=0) + 1e-6)
-    kmeans = KMeans(n_clusters=N_CLUSTERS, random_state=42, n_init=10)
-    cluster_ids = kmeans.fit_predict(feat_std)
+    with threadpool_limits(1):
+        segments = slic(img_np, n_segments=500, compactness=10, sigma=1, start_label=0)
+        features, valid_segment_ids = _extract_superpixel_features(img_np, segments, exclude)
+        if len(features) == 0:
+            return []
+        # Standardize so no single channel dominates the distance.
+        feat_std = (features - features.mean(axis=0)) / (features.std(axis=0) + 1e-6)
+        cluster_ids = KMeans(n_clusters=N_CLUSTERS, random_state=42, n_init=10).fit_predict(feat_std)
 
     # k-means cluster ids are arbitrary -- map each to a ground-cover label
     # from the cluster's mean *raw* color/texture (see _assign_semantic_labels).
@@ -90,6 +113,8 @@ def detect_land_types(
         polygons = _mask_to_multipolygon(cluster_mask, min_area_px=500)
         if polygons.is_empty:
             continue
+        if upscale != 1.0:  # scale polygons back to full-image coordinates
+            polygons = _affine_scale(polygons, xfact=upscale, yfact=upscale, origin=(0, 0))
         results.append({
             "cluster_id": c,
             "label": labels_by_cluster[c],
