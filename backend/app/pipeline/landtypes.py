@@ -12,7 +12,8 @@ Approach:
 import numpy as np
 from PIL import Image
 from shapely.affinity import scale as _affine_scale
-from shapely.geometry import MultiPolygon, Polygon
+from shapely.affinity import translate as _affine_translate
+from shapely.geometry import MultiPolygon, Polygon, box as _box
 from skimage.segmentation import slic
 from sklearn.cluster import KMeans
 import cv2
@@ -36,12 +37,19 @@ CLUSTER_LABELS = ["water", "vegetation", "bare earth / farmland", "paved / hards
 # in real-world-meter modelspace (the mm->scale auto-conversion isn't wired
 # yet, see dxf.py), tuned to read at typical site scales.
 DEFAULT_HATCH_STYLES = {
-    "water":                 {"hatch_type": "lines", "hatch_angle_deg": 0.0, "hatch_scale": 1.0},
-    "vegetation":            {"hatch_type": "dots", "hatch_scale": 2.5},
-    "bare earth / farmland": {"hatch_type": "lines", "hatch_angle_deg": 45.0, "hatch_scale": 1.2},
-    "paved / hardscape":     {"hatch_type": "crosshatch", "hatch_angle_deg": 45.0, "hatch_scale": 1.2},
+    "water":                 {"hatch_type": "lines", "hatch_angle_deg": 0.0, "hatch_scale": 1.0,
+                              "hatch_color": "#c8c8c8"},
+    "vegetation":            {"hatch_type": "dots", "hatch_scale": 2.5,
+                              "hatch_color": "#c8c8c8"},
+    "bare earth / farmland": {"hatch_type": "lines", "hatch_angle_deg": 45.0, "hatch_scale": 1.2,
+                              "hatch_color": "#c8c8c8"},
+    # Crosshatch is inherently the densest/darkest pattern, so give paved the
+    # lightest (near-white) color to keep it the quietest of the three.
+    "paved / hardscape":     {"hatch_type": "crosshatch", "hatch_angle_deg": 45.0, "hatch_scale": 1.2,
+                              "hatch_color": "#ececec"},
 }
-_FALLBACK_HATCH_STYLE = {"hatch_type": "lines", "hatch_angle_deg": 0.0, "hatch_scale": 3.0}
+_FALLBACK_HATCH_STYLE = {"hatch_type": "lines", "hatch_angle_deg": 0.0, "hatch_scale": 3.0,
+                         "hatch_color": "#c8c8c8"}
 
 
 def default_hatch_style(label: str) -> dict:
@@ -120,10 +128,24 @@ def detect_land_types(
     for c in range(N_CLUSTERS):
         clusters_by_label.setdefault(labels_by_cluster.get(c, "ground cover"), []).append(c)
 
+    # A region touching the image edge must reach it squarely, not get eroded
+    # inward and rounded by the morphology/Chaikin smoothing (the lake read as
+    # a rounded blob floating off the bottom edge). Fix: pad the mask with the
+    # edge replicated, so an edge-touching region extends into the pad; do all
+    # the smoothing there; then clip back to the exact image rectangle -- the
+    # frame edges come out straight and flush, interior boundaries stay smooth.
+    pad = 16  # >= the morph-close kernel so edge regions extend into the pad
+    frame = _box(0, 0, w, h)
+
     results = []
     for label, cluster_ids_for_label in clusters_by_label.items():
         label_mask = np.isin(full_cluster_map, cluster_ids_for_label).astype(np.uint8) * 255
-        polygons = _mask_to_multipolygon(label_mask)  # morph + simplify defaults
+        padded = cv2.copyMakeBorder(label_mask, pad, pad, pad, pad, cv2.BORDER_REPLICATE)
+        polygons = _mask_to_multipolygon(padded)  # morph + simplify + chaikin
+        if polygons.is_empty:
+            continue
+        polygons = _affine_translate(polygons, xoff=-pad, yoff=-pad).intersection(frame)
+        polygons = _as_multipolygon(polygons)
         if polygons.is_empty:
             continue
         if upscale != 1.0:  # scale polygons back to full-image coordinates
@@ -270,6 +292,18 @@ def _mask_to_multipolygon(
         elif poly.geom_type == "MultiPolygon":
             polys.extend(g for g in poly.geoms if not g.is_empty)
     return MultiPolygon(polys) if polys else MultiPolygon()
+
+
+def _as_multipolygon(geom) -> MultiPolygon:
+    """Normalize a Polygon/MultiPolygon/GeometryCollection (e.g. from a frame
+    intersection) to a MultiPolygon, dropping non-polygonal slivers."""
+    if geom.is_empty:
+        return MultiPolygon()
+    if geom.geom_type == "Polygon":
+        return MultiPolygon([geom])
+    if geom.geom_type == "MultiPolygon":
+        return geom
+    return MultiPolygon([g for g in geom.geoms if g.geom_type == "Polygon" and not g.is_empty])
 
 
 def _chaikin_closed(coords: list, iterations: int) -> list:

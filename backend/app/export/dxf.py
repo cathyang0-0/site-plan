@@ -142,14 +142,11 @@ def export_dxf(
         block_names.append(block_name)
 
     # --- Layers ---
-    # Each layer's lineweight comes from the caller's style dict when
+    # Each land type gets its OWN layer (LANDTYPE_1, LANDTYPE_2, ...) so the
+    # user can restyle or toggle each ground cover independently. Created in
+    # the land-type loop below (one per detected type).
+    # Other layers' lineweights come from the caller's style dict when
     # provided, falling back to the spec.md §5 architectural defaults.
-    landtype_style = style.get("land_types", [{}])[0] if style.get("land_types") else {}
-    _add_layer(
-        doc, "LANDTYPE",
-        landtype_style.get("color", "#aaaaaa"),
-        landtype_style.get("line_weight_mm", DEFAULT_LINE_WEIGHT_MM["LANDTYPE"]),
-    )
     _add_layer(
         doc, "ROADS",
         style.get("roads", {}).get("color", "#333333"),
@@ -198,16 +195,22 @@ def export_dxf(
         [g for g in (buildings_union, road_network) if g is not None]
     ) if (buildings_union is not None or road_network is not None) else None
 
-    # --- Land type hatches (drawn first — bottommost) ---
-    for lt in land_types:
+    # --- Land type hatches (drawn first — bottommost), one layer per type ---
+    for i, lt in enumerate(land_types):
         lt_style = lt.get("style", {})
+        layer_name = f"LANDTYPE_{i + 1}"
+        _add_layer(
+            doc, layer_name,
+            lt_style.get("hatch_color", "#c8c8c8"),
+            lt_style.get("line_weight_mm", DEFAULT_LINE_WEIGHT_MM["LANDTYPE"]),
+        )
         polygons = lt["polygons"]
         if landtype_clip is not None:
             polygons = _clip_polygons(polygons, landtype_clip)
         if lt_style.get("outline_only", False):
-            _draw_multipolygon_outlines(msp, polygons, poly_rings, "LANDTYPE")
+            _draw_multipolygon_outlines(msp, polygons, poly_rings, layer_name)
         else:
-            _draw_multipolygon_hatches(msp, polygons, poly_rings, "LANDTYPE", lt_style)
+            _draw_multipolygon_hatches(msp, polygons, poly_rings, layer_name, lt_style)
 
     # --- Roads ---
     if road_network is not None:
@@ -387,6 +390,11 @@ def _resample_line(line: LineString, n_samples: int = 30) -> list[tuple]:
     ]
 
 
+def _hex_to_rgb(hex_color: str) -> tuple:
+    """'#rrggbb' -> (r, g, b) ints."""
+    return (int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16))
+
+
 def _add_layer(doc, name: str, hex_color: str, line_weight_mm: float, aci: int = 251):
     """
     Register a layer with both a true-color (rgb) and a fixed ACI fallback.
@@ -443,13 +451,15 @@ def _draw_multipolygon_hatches(msp, mpoly, poly_rings_fn, layer_name: str, lt_st
     for poly in polys:
         exterior, holes = poly_rings_fn(poly)
         # Hatch is a light, thin texture that must recede behind the roof
-        # outlines: force the thinnest lineweight and a light-gray color
+        # outlines: force the thinnest lineweight and an explicit light color
         # (rather than BYLAYER, which some viewers render at a heavy default).
+        # Color is per-type (paved is near-white so its dense crosshatch stays
+        # the quietest); falls back to the shared light gray.
         hatch = msp.add_hatch(dxfattribs={
             "layer": layer_name,
             "lineweight": HATCH_LINEWEIGHT,
         })
-        hatch.rgb = HATCH_RGB
+        hatch.rgb = _hex_to_rgb(lt_style.get("hatch_color")) if lt_style.get("hatch_color") else HATCH_RGB
         hatch.paths.add_polyline_path(exterior, is_closed=True)
         # Each hole (e.g. a building clipped out) is its own boundary path;
         # hatch_style=NESTED makes the odd-parity island rule exclude it.
