@@ -42,8 +42,9 @@ def fetch_aerial_image(west: float, south: float, east: float, north: float):
         scale_m_per_px: float — real-world meters per pixel
         origin_m: tuple (x, y) — top-left corner in meters (local coords)
     """
-    x_min, y_max = lon_lat_to_tile(west, north, ZOOM)
-    x_max, y_min = lon_lat_to_tile(east, south, ZOOM)
+    # Tile y grows southward, so the north edge maps to the smallest tile y.
+    x_min, y_min = lon_lat_to_tile(west, north, ZOOM)
+    x_max, y_max = lon_lat_to_tile(east, south, ZOOM)
 
     cols = x_max - x_min + 1
     rows = y_max - y_min + 1

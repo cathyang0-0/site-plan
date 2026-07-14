@@ -95,3 +95,37 @@ class TestOrthogonalize:
         poly = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
         result = _orthogonalize(poly, angle_threshold_deg=5.0)
         assert isinstance(result, Polygon)
+
+
+class TestSuppressCanopyFalsePositives:
+    def _poly(self, cx, cy, half):
+        from shapely.geometry import Polygon
+        return Polygon([
+            (cx - half, cy - half), (cx + half, cy - half),
+            (cx + half, cy + half), (cx - half, cy + half),
+        ])
+
+    def test_building_under_canopy_removed(self):
+        from app.pipeline.buildings import suppress_canopy_false_positives
+        poly = self._poly(100, 100, 10)
+        trees = [{"x_px": 100, "y_px": 100, "radius_px": 30}]  # fully covers it
+        assert suppress_canopy_false_positives([poly], trees) == []
+
+    def test_building_clear_of_canopy_kept(self):
+        from app.pipeline.buildings import suppress_canopy_false_positives
+        poly = self._poly(100, 100, 10)
+        trees = [{"x_px": 500, "y_px": 500, "radius_px": 30}]
+        assert suppress_canopy_false_positives([poly], trees) == [poly]
+
+    def test_partial_coverage_below_threshold_kept(self):
+        from app.pipeline.buildings import suppress_canopy_false_positives
+        poly = self._poly(100, 100, 20)  # 40x40 square
+        # canopy circle over one corner only
+        trees = [{"x_px": 80, "y_px": 80, "radius_px": 15}]
+        assert suppress_canopy_false_positives([poly], trees) == [poly]
+
+    def test_empty_inputs(self):
+        from app.pipeline.buildings import suppress_canopy_false_positives
+        poly = self._poly(0, 0, 5)
+        assert suppress_canopy_false_positives([], [{"x_px": 0, "y_px": 0, "radius_px": 5}]) == []
+        assert suppress_canopy_false_positives([poly], []) == [poly]

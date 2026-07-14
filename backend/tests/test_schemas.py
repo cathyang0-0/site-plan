@@ -83,8 +83,8 @@ class TestStyleConfig:
         sc = StyleConfig()
         assert isinstance(sc.roofs, RoofStyle)
         assert sc.roads.line_weight_mm == 0.18
-        assert sc.trees.line_weight_mm == 0.13
-        assert sc.land_types == []
+        assert sc.trees.line_weight_mm == 0.10
+        assert len(sc.land_types) == 4
 
     def test_custom_land_types(self):
         sc = StyleConfig(land_types=[LandTypeStyle(), LandTypeStyle(hatch_type="dots")])

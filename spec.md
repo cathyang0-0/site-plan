@@ -60,6 +60,10 @@ Modules run in parallel after imagery is fetched. Each can be independently enab
 
 **Goal:** Clean closed polygons for all building footprints.
 
+**Primary source — Overture Maps footprints (no CV):** for georeferenced sites (the standard map-selection flow), building footprints are fetched from the Overture Maps buildings theme (merges OpenStreetMap, Microsoft ML footprints, Google Open Buildings, USGS lidar) via a per-site bbox query against their cloud-hosted GeoParquet (~1s, a few hundred KB; no local mirror). Footprints are professionally validated, already orthogonal, and include canopy-occluded buildings that no imagery-based detector can see. License: ODbL — exported drawings are "Produced Works" and only require an attribution note (stamped on the `NOTES` layer at export). Validated 2026-07: 659 footprints for the Alamo Heights test bbox vs 96 (with false positives) from SAM2 zero-shot.
+
+**CV fallback (below) applies when:** input is a non-georeferenced image (v2 image upload), footprint data is missing/stale for the region, or the user wants to catch construction newer than the data.
+
 **Model recommendation — fine-tuned segmentation:**
 
 Start with a U-Net (ResNet-50 or EfficientNet-B4 backbone) fine-tuned on one of:
@@ -87,6 +91,12 @@ Recommended approach: pretrain on SpaceNet 2, fine-tune on INRIA. Optionally use
 ### 4b. Roads / Paths
 
 **Goal:** Smooth continuous NURBS curves representing road centerlines or edge pairs. Visually connected road segments must be a single curve entity — no broken lines.
+
+**Primary source — Overture Maps road centerlines (no CV):** for georeferenced sites, roads come from the Overture transportation "segment" theme via a per-bbox GeoParquet query (~1s, same mechanism as footprints §4a). They arrive already as what the CV post-processing below tried to reconstruct: clean, connected centerlines (one entity per road), correct at intersections, classified by type (`residential` / `secondary` / `service` / `footway` / …). This removes the entire segment→skeletonize→graph→trace→spline chain. License: ODbL (attribution stamped at export). Validated 2026-07: 127 accurate centerlines for the Alamo Heights test bbox.
+
+**Road width (hybrid, class prior + light CV):** Overture gives road *class* but not a measured width. Each road gets a class-based prior width (`roads.CLASS_WIDTH_M`, following the "recommended by type" values below), then a lightweight CV measurement nudges it toward the actual pavement seen in the image: perpendicular samples along the centerline step outward until the color diverges from the centerline (pavement→grass/roof), and the median half-widths give an observed width. The observed value is clamped to CV_CLAMP × the class prior and mixed in at weight `CV_WIDTH_WEIGHT` (default 0.5), so unusually wide/narrow roads adapt but a noisy read can't blow up — the class prior stays the anchor. Samples whose centerline pixel is vegetation (tree overhang / grass median) are skipped, so under-canopy roads fall back to the prior. The resulting `width_px` feeds the exporter's pavement-corridor + fillet logic (`_build_road_network`), which already merges corridors and rounds intersections.
+
+**CV fallback (below) applies** to non-georeferenced imagery (v2 image upload) or regions missing from the data.
 
 **Model:** Fine-tuned DeepLabV3+ on road segmentation. Training data options:
 - **SpaceNet 3 Road Network** — road mask labels with good coverage
@@ -117,10 +127,11 @@ Road width estimated from the mask's medial axis thickness → used to offset ce
 Alternative if DeepForest performs poorly on the target imagery style: SAM2 Automatic Mask Generator filtered to round blobs in the 2–15 m diameter range.
 
 **Post-processing:**
-1. NMS on overlapping detections (IoU threshold 0.3)
+1. NMS on overlapping detections (IoU threshold 0.4 — deliberately permissive: real forest crowns interlock, and a strict threshold blanks out dense stands)
 2. Extract centroid and radius from each bounding box
-3. Filter: radius must be 1–10 m
-4. Output: list of `(x, y, radius)` tuples in real-world coordinates
+3. **Crown-size caveat & control:** the detector gives reliable tree *positions*, but its box *size* is not a trustworthy absolute canopy measurement — it depends on image resolution relative to the model's training GSD, and DeepForest's median estimate skews small for a context plan (empirically ~7 m diameter on a mature suburb where a drafter wants ~10–12 m; verified stable across resampling, so not tunable via resolution). A global **crown-size multiplier** (`crown_size_scale`, default 1.0) scales rendered canopy to taste without touching positions; the per-tree manual resize tool (§6 Step 4.5) handles individual overrides.
+4. Size handling (after the multiplier): radius < 1.5 m enlarged to 1.5 m (keep small trees readable); radius > 10 m treated as a **dense stand** (merged crowns the detector can't separate) and filled with synthetic trees scattered across the box's ellipse — jittered spacing and sizes so the fill reads as a natural stand, not a pattern. Fill is strictly detection-led: only areas the model flagged as canopy are filled.
+5. Output: list of `(x, y, radius)` tuples in real-world coordinates
 
 **Layer name:** `TREES`
 
@@ -128,7 +139,9 @@ Alternative if DeepForest performs poorly on the target imagery style: SAM2 Auto
 
 **Goal:** Identify distinct ground-cover types (farmland, grass, hardscape, gravel, water, etc.) as separate filled regions that the user can assign hatches to or discard.
 
-**Approach — unsupervised texture segmentation:**
+**Implemented (POC):** SLIC superpixels → per-superpixel **color-forward** features `[R, G, B, excess-green, blueness, saturation, value, texture]` → standardized k-means (k=4) → **semantic label assignment** (each arbitrary cluster is mapped to water/vegetation/bare/paved by its mean color/texture, since k-means ids carry no meaning) → per-cluster MultiPolygon → default hatch per label (§5 table). Validated 2026-07 on the lakeside test image: water/forest/bare-field/paved separate correctly. The original Gabor(4×6)+LBP feature plan below was replaced — texture-heavy features let noise dominate and mixed water with forest; color leads, one texture channel supports. Not yet implemented from the fuller plan: <50 m² region merging (step 5) and B-spline boundary smoothing (step 7); regions currently export as simplified polygon boundaries.
+
+**Approach — unsupervised texture segmentation (fuller target):**
 1. Mask out building footprints and detected road areas from the aerial image
 2. Extract texture features per pixel: Gabor filter bank (4 scales × 6 orientations), color histograms in HSV space, LBP (Local Binary Patterns)
 3. Spatial smoothing (superpixel pre-segmentation via SLIC to reduce noise)
@@ -299,6 +312,29 @@ Calibration persists within the session. Repeated across sessions if new blocks 
 ### Step 4 — Assign land type hatches
 For each detected land cluster, user sees a color-coded thumbnail and assigns a hatch or discards it. User has the option to make hatch a gradient (offsets a distance from boundary and assigns the same hatch with lower density closer to the boundary, a slider adjusts gradient level - number of offset steps, 0 being non gradient). This is the only step requiring active user judgment.
 
+### Step 4.5 — Manual tree corrections (planned)
+
+Detection will miss trees (especially in dense, low-contrast canopy) and occasionally place false ones. The preview canvas gets three manual correction tools so the user can fix the tree layer without leaving the app:
+
+- **Plot tree:** click to place an individual tree symbol the detector missed. Optional radius drag (or default to the detected-crown median). Manually plotted trees flow through the same block assignment, calibration scaling, and export path as detected ones.
+- **Paint fill area:** brush over a region of canopy to have it synthetically filled with trees, using the same stand-fill generator as oversized detections (jittered spacing, size variance, clearings — see §4c). Repainting an area regenerates its fill; the brush is the manual counterpart of a detected dense-stand box.
+- **Erase:** remove trees — individually (click) or by brushing an area. Works on detected, stand-filled, and manually plotted trees alike.
+
+Manual edits are applied to the tree placement list before overlap filtering and export, so suppression rules and roof masking treat manual trees exactly like detected ones. Edits persist within the session.
+
+**Canopy size controls (two sliders):** the detector's crown size is not a reliable absolute measurement (see §4c), so the tree layer exposes two global sliders, applied live to the preview.
+
+Both operate on each tree's own detected size relative to the mean, so the detected size *distribution* (which trees are bigger/smaller than their neighbors) is preserved — only its center and spread are reshaped:
+
+1. Compute the mean detected crown radius across all trees, `mean_r`.
+2. Each tree keeps its signed deviation from that mean, `d_i = r_i − mean_r`.
+3. **Tree size variance** slider `v` (default 1.0) scales each deviation: `r'_i = mean_r + v · d_i`. `v = 0` collapses every tree to the mean (uniform size); `v = 1` preserves the detected spread; `v > 1` exaggerates it (big trees bigger, small trees smaller).
+4. **Average tree size** slider (`crown_size_scale`, default 1.0) then scales the whole result: `r''_i = crown_size_scale · r'_i`, moving the distribution's center without changing its relative spread.
+
+The two are independent: average moves the center, variance expands/contracts around it. Both are pure render-time transforms on existing placements (no re-inference), so the preview updates instantly.
+
+> **Known limitation (not yet addressed):** the readable-size floor (`MIN_CANOPY_RADIUS_M`) is applied to `r'_i` *before* the average multiplier. So with an **average size below 1.0**, a floored small crown ends at `MIN_CANOPY_RADIUS_M · crown_size_scale`, i.e. *below* the intended readable minimum. This only bites when the average slider goes under 1× (an unusual setting — the control is normally used to enlarge). Left as-is for now; if the average slider is ever allowed below 1×, apply the floor after the average scale instead. A related side effect: at high variance the floor asymmetrically clamps small crowns, nudging the mean slightly upward, so "average size" isn't perfectly preserved when variance is large.
+
 ### Step 5 — Style
 User sees a thumbnail preview and adjusts line weights, colors, opacity, and hatch parameters per layer. Preview (SVG) updates live. (can be a simplified standard drawing that has all the components, doesn't ave to match the actual site plan generated) 
 
@@ -311,7 +347,7 @@ User clicks Download → selects DXF and/or 3DM → backend assembles file with 
 
 ### Overlap filtering
 
-Two overlap rules are enforced:
+Two overlap rules are enforced (thresholds independently tunable):
 1. A tree whose canopy overlaps a **building** by >30% is suppressed (implausible planting location)
 2. A tree whose canopy overlaps an **already-accepted tree** by >30% is suppressed (prevents dense clumping)
 
@@ -481,6 +517,7 @@ Library: `rhino3dm` (Python, v8.17, MIT)
 - Style controls: color, line weight per layer; hatch style per land type; tree block random assignment
 - Roof white-fill masking (automatic, always on)
 - SVG preview with live style updates
+- Manual tree corrections on the preview: plot missed trees, paint areas for synthetic stand fill, erase (see §6, Step 4.5)
 - DXF export with blocks, layers, hatches
 - Local coordinate origin (site center = 0,0)
 - Processing time target: <60s for a 500×500 m site

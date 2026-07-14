@@ -62,3 +62,6 @@ celerybeat.pid
 # Logs
 *.log
 logs/
+
+# PyTorch Lightning run artifacts (created by deepforest inference)
+lightning_logs/
