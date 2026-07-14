@@ -22,6 +22,11 @@ import cv2
 # resulting polygons back. Also caps SLIC/k-means cost.
 MAX_DETECT_DIM = 1400
 
+# How strongly a cyan/teal color (blue AND green both above red) counts as
+# water. Biases blue-green shallows -- where the lakebed tints the water
+# green but blue still beats red -- toward water rather than bare earth.
+WATER_TEAL_WEIGHT = 0.6
+
 N_CLUSTERS = 4
 CLUSTER_LABELS = ["water", "vegetation", "bare earth / farmland", "paved / hardscape"]
 
@@ -32,7 +37,7 @@ CLUSTER_LABELS = ["water", "vegetation", "bare earth / farmland", "paved / hards
 # yet, see dxf.py), tuned to read at typical site scales.
 DEFAULT_HATCH_STYLES = {
     "water":                 {"hatch_type": "lines", "hatch_angle_deg": 0.0, "hatch_scale": 1.0},
-    "vegetation":            {"hatch_type": "dots", "hatch_scale": 12.0},
+    "vegetation":            {"hatch_type": "dots", "hatch_scale": 2.5},
     "bare earth / farmland": {"hatch_type": "lines", "hatch_angle_deg": 45.0, "hatch_scale": 1.2},
     "paved / hardscape":     {"hatch_type": "crosshatch", "hatch_angle_deg": 45.0, "hatch_scale": 1.2},
 }
@@ -107,19 +112,27 @@ def detect_land_types(
     for seg_id, cluster_id in zip(valid_segment_ids, cluster_ids):
         full_cluster_map[segments == seg_id] = cluster_id
 
-    results = []
+    # Group clusters by their assigned label (independent assignment means
+    # several clusters -- e.g. deep water + shallows -- can share one), then
+    # build one merged region per label. Merging at the mask level also lets
+    # morphology heal seams between adjacent same-label clusters.
+    clusters_by_label: dict[str, list[int]] = {}
     for c in range(N_CLUSTERS):
-        cluster_mask = (full_cluster_map == c).astype(np.uint8) * 255
-        polygons = _mask_to_multipolygon(cluster_mask)  # morph + simplify defaults
+        clusters_by_label.setdefault(labels_by_cluster.get(c, "ground cover"), []).append(c)
+
+    results = []
+    for label, cluster_ids_for_label in clusters_by_label.items():
+        label_mask = np.isin(full_cluster_map, cluster_ids_for_label).astype(np.uint8) * 255
+        polygons = _mask_to_multipolygon(label_mask)  # morph + simplify defaults
         if polygons.is_empty:
             continue
         if upscale != 1.0:  # scale polygons back to full-image coordinates
             polygons = _affine_scale(polygons, xfact=upscale, yfact=upscale, origin=(0, 0))
         results.append({
-            "cluster_id": c,
-            "label": labels_by_cluster[c],
+            "cluster_id": cluster_ids_for_label[0],
+            "label": label,
             "polygons": polygons,
-            "thumbnail": _make_thumbnail(img_np, cluster_mask),
+            "thumbnail": _make_thumbnail(img_np, label_mask),
         })
 
     return results
@@ -129,9 +142,16 @@ def _assign_semantic_labels(features: np.ndarray, cluster_ids: np.ndarray) -> di
     """
     Map arbitrary k-means cluster ids to ground-cover labels using each
     cluster's mean color/texture. k-means finds 4 groups but doesn't know
-    which is water vs grass vs paved vs bare -- this scores every
-    (cluster, label) pair and greedily assigns each label to its best
-    remaining cluster, so the 4 labels map sensibly regardless of id order.
+    which is water vs grass vs paved vs bare.
+
+    Each cluster is assigned to its OWN highest-scoring label, independently
+    (not a bijection). A real scene isn't guaranteed to contain all four
+    types: a lakeshore has deep water AND blue-green shallows -- two
+    water-like clusters -- and no true bare earth. Forcing a one-label-per-
+    cluster assignment there pushed the shallows onto "bare". Independent
+    assignment lets both become water (and same-label clusters are merged by
+    the caller). Land clusters never pick water because their water score is
+    negative (low blueness, penalties).
 
     Feature layout (see _extract_superpixel_features): [R, G, B, exg,
     blueness, sat, value, texture].
@@ -140,34 +160,24 @@ def _assign_semantic_labels(features: np.ndarray, cluster_ids: np.ndarray) -> di
 
     def score(f, label):
         R, G, B, exg, blueness, sat, value, texture = f
-        if label == "water":            # blue-shifted, dark, smooth, not green
-            return blueness - exg - texture * 0.5 - value * 0.3
-        if label == "vegetation":       # green dominates
-            return exg
+        teal = min(G, B) - R  # cyan/teal index: both blue AND green above red
+        if label == "water":
+            # Blue-shifted, dark, smooth. The teal term (WATER_TEAL_WEIGHT)
+            # biases blue-green shallows -- where the lakebed greens the water
+            # but blue still dominates red -- toward water rather than bare.
+            return blueness + WATER_TEAL_WEIGHT * teal - texture * 0.5 - value * 0.3
+        if label == "vegetation":       # green dominates, on land
+            # Penalize only POSITIVE blueness so blue-green shallows (some
+            # green but blue-shifted) don't read as vegetation; brown/red
+            # (negative blueness) must not be rewarded here.
+            return exg - max(blueness, 0.0)
         if label == "paved / hardscape":  # gray: low saturation, brighter, flat
             return value - sat * 2.0 - abs(exg) - blueness
-        if label == "bare earth / farmland":  # warm/brown: R>=G>B, low green, low blue
+        if label == "bare earth / farmland":  # warm/brown: R>=B, low green, low blue
             return (R - B) - exg - abs(blueness) * 0.5
         return 0.0
 
-    # Greedy: repeatedly take the highest-scoring (cluster,label) pair.
-    clusters = list(means)
-    labels = list(CLUSTER_LABELS)
-    pairs = sorted(
-        ((score(means[c], lb), c, lb) for c in clusters for lb in labels),
-        reverse=True,
-    )
-    assigned, used_c, used_lb = {}, set(), set()
-    for _, c, lb in pairs:
-        if c in used_c or lb in used_lb:
-            continue
-        assigned[c] = lb
-        used_c.add(c); used_lb.add(lb)
-    # Any leftover clusters (fewer labels than clusters shouldn't happen with
-    # k=4) get a generic name.
-    for c in clusters:
-        assigned.setdefault(c, "ground cover")
-    return assigned
+    return {c: max(CLUSTER_LABELS, key=lambda lb: score(means[c], lb)) for c in means}
 
 
 def _extract_superpixel_features(
