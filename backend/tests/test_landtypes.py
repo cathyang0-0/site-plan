@@ -191,3 +191,33 @@ class TestDetectLandTypes:
         results = detect_land_types(img, building_mask, road_mask)
         for r in results:
             assert isinstance(r["polygons"], MultiPolygon)
+
+
+class TestChaikinSmoothing:
+    def test_closed_ring_stays_closed_and_grows(self):
+        from app.pipeline.landtypes import _chaikin_closed
+        square = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
+        out = _chaikin_closed(square, iterations=2)
+        assert out[0] == out[-1]                      # still closed
+        assert len(out) > len(square)                 # corner-cutting adds points
+
+    def test_corners_are_cut_inside_hull(self):
+        # A cut corner pulls the boundary inward: no smoothed point sits at
+        # the original sharp corner (10,10).
+        from app.pipeline.landtypes import _chaikin_closed
+        square = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
+        out = _chaikin_closed(square, iterations=2)
+        assert (10, 10) not in out
+        assert all(0 <= x <= 10 and 0 <= y <= 10 for x, y in out)
+
+    def test_degenerate_ring_returned_asis(self):
+        from app.pipeline.landtypes import _chaikin_closed
+        tiny = [(0, 0), (1, 1), (0, 0)]
+        assert _chaikin_closed(tiny, iterations=2) == tiny
+
+    def test_smoothed_polygon_valid(self):
+        from app.pipeline.landtypes import _mask_to_multipolygon
+        m = _solid_mask(300, 300, 60, 60, 240, 240)
+        mp = _mask_to_multipolygon(m)  # chaikin on by default
+        assert not mp.is_empty
+        assert all(g.is_valid for g in mp.geoms)

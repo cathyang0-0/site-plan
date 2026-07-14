@@ -215,18 +215,21 @@ def _mask_to_multipolygon(
     morph_open_px: int = 3,
     morph_close_px: int = 11,
     simplify_tol_px: float = 2.5,
+    chaikin_iterations: int = 2,
 ) -> MultiPolygon:
     """
     Convert a binary cluster mask to a clean MultiPolygon.
 
     Per-superpixel k-means labelling produces speckled, jagged regions (a
-    lawn shatters into islands wherever a cell flips class). This cleans them
-    in three cheap steps before/after contouring:
+    lawn shatters into islands wherever a cell flips class). This cleans them:
       1. Morphological OPEN (remove speckle) then CLOSE (fill gaps and merge
          neighbouring islands into one region) -- the main de-fragmenter.
       2. Area filter -- drop what survives that is still tiny.
       3. Douglas-Peucker simplify -- collapse the pixel-staircase boundary
          into clean straight-ish edges instead of a jagged step outline.
+      4. Chaikin corner-cutting -- round the simplified corners into smooth
+         organic curves, so land-type edges read hand-drawn rather than
+         faceted (spec §4d "smooth organic curves, not jagged pixel-step").
     """
     if morph_open_px > 0:
         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (morph_open_px, morph_open_px))
@@ -246,6 +249,8 @@ def _mask_to_multipolygon(
         poly = Polygon(pts)
         if simplify_tol_px > 0:
             poly = poly.simplify(simplify_tol_px, preserve_topology=True)
+        if chaikin_iterations > 0 and poly.geom_type == "Polygon" and not poly.is_empty:
+            poly = Polygon(_chaikin_closed(list(poly.exterior.coords), chaikin_iterations))
         if not poly.is_valid:
             poly = poly.buffer(0)
         if poly.is_empty:
@@ -255,6 +260,31 @@ def _mask_to_multipolygon(
         elif poly.geom_type == "MultiPolygon":
             polys.extend(g for g in poly.geoms if not g.is_empty)
     return MultiPolygon(polys) if polys else MultiPolygon()
+
+
+def _chaikin_closed(coords: list, iterations: int) -> list:
+    """
+    Chaikin corner-cutting on a closed ring. Each pass replaces every edge
+    with two points at 1/4 and 3/4 along it, cutting the corner; repeating
+    converges to a smooth quadratic B-spline-like curve. Returns a closed
+    ring (last point == first).
+
+    `coords` is a closed ring (findContours/shapely give first==last); the
+    duplicate close point is dropped for the wrap-around math and re-added.
+    """
+    pts = coords[:-1] if len(coords) > 1 and coords[0] == coords[-1] else list(coords)
+    if len(pts) < 3:
+        return coords
+    for _ in range(iterations):
+        out = []
+        n = len(pts)
+        for i in range(n):
+            (x0, y0), (x1, y1) = pts[i], pts[(i + 1) % n]
+            out.append((0.75 * x0 + 0.25 * x1, 0.75 * y0 + 0.25 * y1))
+            out.append((0.25 * x0 + 0.75 * x1, 0.25 * y0 + 0.75 * y1))
+        pts = out
+    pts.append(pts[0])  # close the ring
+    return pts
 
 
 def _make_thumbnail(img_np: np.ndarray, mask: np.ndarray, size: int = 64) -> Image.Image:
