@@ -36,7 +36,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.export.dxf import export_dxf
-from app.pipeline.trees import filter_placements, MIN_CANOPY_RADIUS_M
+from app.pipeline.trees import filter_placements, suppress_over_water, MIN_CANOPY_RADIUS_M
 
 DEFAULT_BLOCK_RADIUS_PX = 20.0  # matches default_tree_block()'s default radius
 
@@ -340,11 +340,8 @@ def main():
                 # (Footprint buildings are authoritative -- no cross-filter.)
                 buildings = suppress_canopy_false_positives(buildings, detections)
                 print(f"  Buildings after canopy cross-filter: {len(buildings)}")
-        if args.real_trees:
-            # >30% building-overlap rule suppresses rooftop tree detections.
-            accepted = filter_placements(detections, building_polygons=buildings)
-            tree_placements = detections_to_placements(accepted)
-            print(f"  Trees after overlap filtering: {len(tree_placements)}")
+        # Land types run BEFORE the tree filter so its water regions can
+        # suppress trees the detector hallucinated on the lake surface.
         if args.land_types:
             print("Detecting land-cover types (unsupervised clustering)...")
             from app.pipeline.landtypes import detect_land_types, default_hatch_style
@@ -357,6 +354,22 @@ def main():
                 for d in detected
             ]
             print(f"  Land types: {', '.join(d['label'] for d in land_types)}")
+        if args.real_trees:
+            # >30% building-overlap rule suppresses rooftop tree detections.
+            accepted = filter_placements(detections, building_polygons=buildings)
+            # Drop trees the detector placed on open water (wave/reflection
+            # false positives), using the detected water regions.
+            water_polys = [
+                g for lt in land_types if lt["label"] == "water"
+                for g in (lt["polygons"].geoms if hasattr(lt["polygons"], "geoms")
+                          else [lt["polygons"]])
+            ]
+            if water_polys:
+                before = len(accepted)
+                accepted = suppress_over_water(accepted, water_polys)
+                print(f"  Trees suppressed over water: {before - len(accepted)}")
+            tree_placements = detections_to_placements(accepted)
+            print(f"  Trees after filtering: {len(tree_placements)}")
     else:
         print("Generating placeholder geometry (real CV models not yet wired up)...")
         buildings = placeholder_buildings(img_w, img_h)

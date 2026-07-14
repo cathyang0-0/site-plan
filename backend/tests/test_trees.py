@@ -240,3 +240,23 @@ class TestApplySizeTransform:
         dets = [_stand(0, 0, 300, 300)]
         apply_size_transform(dets, size_variance=0.0, crown_size_scale=2.0)
         assert dets[0]["radius_m"] == pytest.approx(30.0)
+
+
+class TestSuppressOverWater:
+    def test_tree_in_water_removed(self):
+        from app.pipeline.trees import suppress_over_water
+        from shapely.geometry import Polygon
+        water = Polygon([(0, 0), (100, 0), (100, 100), (0, 100)])
+        dets = [_det(50, 50, 5), _det(500, 500, 5)]  # first inside water
+        out = suppress_over_water(dets, [water])
+        assert len(out) == 1 and out[0]["x_px"] == 500
+
+    def test_no_water_is_noop(self):
+        from app.pipeline.trees import suppress_over_water
+        dets = [_det(50, 50, 5)]
+        assert suppress_over_water(dets, []) == dets
+
+    def test_empty_detections(self):
+        from app.pipeline.trees import suppress_over_water
+        from shapely.geometry import Polygon
+        assert suppress_over_water([], [Polygon([(0, 0), (1, 0), (1, 1)])]) == []

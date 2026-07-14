@@ -35,6 +35,11 @@ DEFAULT_LINE_WEIGHT_MM = {
 # spec.md §4b default fillet radius, applied at road/road intersections.
 DEFAULT_FILLET_RADIUS_M = 3.0
 
+# Land-type hatch appearance: lightest lineweight and a light gray so the
+# hatch reads as background texture and the roof outlines stay dominant.
+HATCH_LINEWEIGHT = 5          # 0.05 mm (thinnest valid DXF lineweight)
+HATCH_RGB = (200, 200, 200)   # light gray
+
 # $SORTENTS (header var 280) bitcode -- which operations respect the explicit
 # SORTENTSTABLE redraw order instead of raw entity/handle order:
 #   1 = object selection, 2 = object snap, 16 = REGEN, 32 = plotting/printing
@@ -437,13 +442,20 @@ def _draw_multipolygon_hatches(msp, mpoly, poly_rings_fn, layer_name: str, lt_st
 
     for poly in polys:
         exterior, holes = poly_rings_fn(poly)
-        hatch = msp.add_hatch(dxfattribs={"layer": layer_name})
+        # Hatch is a light, thin texture that must recede behind the roof
+        # outlines: force the thinnest lineweight and a light-gray color
+        # (rather than BYLAYER, which some viewers render at a heavy default).
+        hatch = msp.add_hatch(dxfattribs={
+            "layer": layer_name,
+            "lineweight": HATCH_LINEWEIGHT,
+        })
+        hatch.rgb = HATCH_RGB
         hatch.paths.add_polyline_path(exterior, is_closed=True)
-        # Each hole is added as its own boundary path on the same HATCH --
-        # ezdxf/DXF treats nested loops as exclusions from the fill
-        # automatically, no extra flags needed (verified against a render).
+        # Each hole (e.g. a building clipped out) is its own boundary path;
+        # hatch_style=NESTED makes the odd-parity island rule exclude it.
         for hole in holes:
             hatch.paths.add_polyline_path(hole, is_closed=True)
+        hatch.dxf.hatch_style = 0  # NESTED / odd-even island detection
 
         if hatch_type == "solid":
             hatch.set_pattern_fill("SOLID")
@@ -452,6 +464,9 @@ def _draw_multipolygon_hatches(msp, mpoly, poly_rings_fn, layer_name: str, lt_st
         elif hatch_type == "crosshatch":
             hatch.set_pattern_fill("NET", scale=scale, angle=angle)
         elif hatch_type == "dots":
-            hatch.set_pattern_fill("DOTS", scale=spacing / 25.4)
+            # NB: use the same `scale` (hatch_scale override) as the other
+            # patterns -- the old spacing/25.4 here ignored hatch_scale and
+            # packed dots so densely they read as a solid fill.
+            hatch.set_pattern_fill("DOTS", scale=scale)
         else:
             pass  # outline only — no hatch entity

@@ -276,6 +276,31 @@ def fill_dense_stands(
     return singles + synthetic
 
 
+def suppress_over_water(detections: list[dict], water_polygons: list) -> list[dict]:
+    """
+    Drop tree detections whose center falls inside a water region.
+
+    DeepForest reads wave/reflection texture on open water as canopy, so a
+    lakeside site sprouts phantom trees on the lake. The land-type water
+    polygons (pixel coords) mark where that is; any tree centered in water is
+    removed. Analogous to the building-overlap rule, but water uses a
+    point-in-polygon test (a tree symbol shouldn't sit on water at all).
+    """
+    if not detections or not water_polygons:
+        return detections
+    from shapely.geometry import Point
+    from shapely.strtree import STRtree
+
+    index = STRtree(water_polygons)
+    kept = []
+    for det in detections:
+        pt = Point(det["x_px"], det["y_px"])
+        if any(water_polygons[i].contains(pt) for i in index.query(pt)):
+            continue
+        kept.append(det)
+    return kept
+
+
 def filter_placements(
     detections: list[dict],
     building_polygons: list[Polygon],

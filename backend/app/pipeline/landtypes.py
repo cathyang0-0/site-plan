@@ -32,7 +32,7 @@ CLUSTER_LABELS = ["water", "vegetation", "bare earth / farmland", "paved / hards
 # yet, see dxf.py), tuned to read at typical site scales.
 DEFAULT_HATCH_STYLES = {
     "water":                 {"hatch_type": "lines", "hatch_angle_deg": 0.0, "hatch_scale": 1.0},
-    "vegetation":            {"hatch_type": "dots", "hatch_scale": 8.0},
+    "vegetation":            {"hatch_type": "dots", "hatch_scale": 12.0},
     "bare earth / farmland": {"hatch_type": "lines", "hatch_angle_deg": 45.0, "hatch_scale": 1.2},
     "paved / hardscape":     {"hatch_type": "crosshatch", "hatch_angle_deg": 45.0, "hatch_scale": 1.2},
 }
