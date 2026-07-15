@@ -92,14 +92,76 @@ def _strip_prefix(sd):
 
 
 def _infer_mit_variant(sd):
-    """Guess mit-b0..b5 from the first block's hidden size (patch_embeddings.0)."""
-    # SegformerForSemanticSegmentation keys look like:
-    # segformer.encoder.patch_embeddings.0.proj.weight  -> [C0, 3, 7, 7]
+    """Guess the base variant from the stem width (stage-0 patch embedding).
+    Runs AFTER _remap_legacy_segformer, so keys are in the modern
+    `segformer.stages.0.patch_embeddings.proj.weight` form. Width only picks the
+    config base: b0 is 32, b1..b5 all share 64 and are disambiguated later by
+    depths (see _infer_depths), so 64 -> b1 as a base is fine."""
     for k, v in sd.items():
-        if k.endswith("patch_embeddings.0.proj.weight"):
+        if k.endswith("stages.0.patch_embeddings.proj.weight"):
             c0 = v.shape[0]
             return {32: "nvidia/mit-b0", 64: "nvidia/mit-b1"}.get(c0), c0
     return None, None
+
+
+def _infer_decoder_hidden_size(sd):
+    """The community checkpoint may use a non-default decoder width. Read it
+    straight from the decode head instead of trusting the encoder-variant
+    default (b1 defaults to 256; this checkpoint uses 768)."""
+    for key in ("decode_head.batch_norm.weight", "decode_head.classifier.weight"):
+        if key in sd:
+            return int(sd[key].shape[0] if key.endswith("batch_norm.weight")
+                       else sd[key].shape[1])
+    return None
+
+
+def _remap_legacy_segformer(sd):
+    """This checkpoint was saved with transformers 4.x, which used different
+    SegFormer state-dict key names than transformers >=5 (encoder->stages,
+    block->blocks, attention.self.{query,key,value}->attention.{q,k,v}_proj,
+    etc.). Rename in place so the weights actually load; otherwise
+    load_state_dict(strict=False) silently drops everything and the model runs
+    on random init (symptom: whole image classified as one class)."""
+    import re
+    out = {}
+    for k, v in sd.items():
+        nk = k
+        nk = re.sub(r"segformer\.encoder\.patch_embeddings\.(\d+)\.",
+                    r"segformer.stages.\1.patch_embeddings.", nk)
+        nk = re.sub(r"segformer\.encoder\.block\.(\d+)\.(\d+)\.",
+                    r"segformer.stages.\1.blocks.\2.", nk)
+        nk = re.sub(r"segformer\.encoder\.layer_norm\.(\d+)\.",
+                    r"segformer.stages.\1.layer_norm.", nk)
+        nk = nk.replace(".layer_norm_1.", ".layernorm_before.")
+        nk = nk.replace(".layer_norm_2.", ".layernorm_after.")
+        nk = nk.replace(".attention.self.query.", ".attention.q_proj.")
+        nk = nk.replace(".attention.self.key.", ".attention.k_proj.")
+        nk = nk.replace(".attention.self.value.", ".attention.v_proj.")
+        nk = nk.replace(".attention.output.dense.", ".attention.o_proj.")
+        nk = nk.replace(".attention.self.sr.",
+                        ".attention.sequence_reduction.sequence_reduction.")
+        nk = nk.replace(".attention.self.layer_norm.",
+                        ".attention.sequence_reduction.layer_norm.")
+        nk = nk.replace(".mlp.dense1.", ".mlp.fc1.")
+        nk = nk.replace(".mlp.dense2.", ".mlp.fc2.")
+        nk = re.sub(r"decode_head\.linear_c\.(\d+)\.",
+                    r"decode_head.linear_projections.\1.", nk)
+        out[nk] = v
+    return out
+
+
+def _infer_depths(sd):
+    """Count transformer blocks per stage from the (remapped) checkpoint.
+    mit-b1..b5 all share widths [64,128,320,512] and differ only in depth, so
+    the encoder width alone can't pin the variant — read the depths instead."""
+    import re
+    depths = {}
+    for k in sd:
+        m = re.match(r"segformer\.stages\.(\d+)\.blocks\.(\d+)\.", k)
+        if m:
+            s, b = int(m.group(1)), int(m.group(2))
+            depths[s] = max(depths.get(s, 0), b + 1)
+    return [depths[i] for i in range(len(depths))] if depths else None
 
 
 def load_model():
@@ -111,7 +173,7 @@ def load_model():
     path = hf_hub_download(repo_id=HF_REPO, filename=HF_CKPT)
     print(f"  -> {path}")
     raw = torch.load(path, map_location="cpu", weights_only=False)
-    sd = _strip_prefix(raw)
+    sd = _remap_legacy_segformer(_strip_prefix(raw))
 
     variant, c0 = _infer_mit_variant(sd)
     if variant is None:
@@ -119,19 +181,35 @@ def load_model():
         for k in list(sd)[:30]:
             print("   ", k, tuple(getattr(sd[k], "shape", ())))
         raise SystemExit("Pin the architecture manually, then re-run.")
-    print(f"Inferred encoder ~ {variant} (patch_embeddings.0 width={c0})")
+
+    dec_hidden = _infer_decoder_hidden_size(sd)
+    depths = _infer_depths(sd)
+    print(f"Inferred encoder width={c0} (~{variant}), "
+          f"depths={depths}, decoder_hidden_size={dec_hidden}")
 
     id2label = {i: OEM_NAMES[i] for i in range(N_CLASSES)}
-    cfg = SegformerConfig.from_pretrained(
-        variant, num_labels=N_CLASSES, id2label=id2label,
+    cfg_kwargs = dict(
+        num_labels=N_CLASSES, id2label=id2label,
         label2id={v: k for k, v in id2label.items()},
     )
+    if dec_hidden is not None:
+        cfg_kwargs["decoder_hidden_size"] = dec_hidden
+    if depths is not None:
+        cfg_kwargs["depths"] = depths
+    cfg = SegformerConfig.from_pretrained(variant, **cfg_kwargs)
     model = SegformerForSemanticSegmentation(cfg)
     missing, unexpected = model.load_state_dict(sd, strict=False)
-    print(f"  load_state_dict: {len(missing)} missing, {len(unexpected)} unexpected keys")
-    if len(missing) > 20:
-        print("   (many missing keys — architecture likely mismatched; sample:)",
-              missing[:8])
+    # A partial load is worse than a hard failure: it runs on random init and
+    # produces confident garbage. Refuse to proceed unless the load is clean.
+    real_missing = [k for k in missing if not k.endswith("num_batches_tracked")]
+    if real_missing or unexpected:
+        print(f"  load_state_dict: {len(real_missing)} missing, "
+              f"{len(unexpected)} unexpected keys")
+        print("   missing sample:   ", real_missing[:8])
+        print("   unexpected sample:", unexpected[:8])
+        raise SystemExit("Checkpoint did not map cleanly onto the model — "
+                         "aborting rather than run on partially-loaded weights.")
+    print("  load_state_dict: clean (0 missing, 0 unexpected)")
     model.eval()
     return model
 
