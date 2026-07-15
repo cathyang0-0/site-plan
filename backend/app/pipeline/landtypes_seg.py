@@ -71,6 +71,21 @@ _MORPH_BY_LABEL = {
     "paved / hardscape": dict(morph_open_px=0, morph_close_px=3, min_area_px=400),
 }
 
+# OEM class indices that collapse to "paved / hardscape".
+PAVED_IDS = (3, 4)  # Pavement, Road
+
+# Confidence gate for paved pixels. The off-the-shelf model over-predicts paved
+# on shoreline/beach and shadowed tree/roof, where Pavement/Road narrowly wins
+# with low probability; genuine roads/paths score much higher. So a paved pixel
+# is only kept if its softmax probability clears this bar — otherwise it is
+# demoted to its best NON-paved class (water/tree/bare underneath), which curbs
+# the false positives without touching the confident thin hardscape. Applied
+# only to paved (the false-positive-prone class); a global gate would risk
+# poking holes in legitimately less-peaked water/vegetation. Set 0.0 to disable.
+# 0.6 chosen by eyeballing the Cayuga overlay: it dissolves the shoreline/shadow
+# blobs while the real road/path network survives (paved fraction 0.078 -> 0.059).
+PAVED_MIN_CONF = 0.6
+
 # --- model / inference config (SegFormer-B2 checkpoint, OEM-fine-tuned) --------
 HF_REPO = "odil111/segformer-fine-tuned-on-openearthmap"
 HF_CKPT = "segformer_sem_seg_2024-05-16--14-40-45/segformer_sem_seg_checkpoint_epoch35.pt"
@@ -88,6 +103,7 @@ def detect_land_types_seg(
     building_mask: np.ndarray,
     road_mask: np.ndarray,
     *,
+    paved_min_conf: float = PAVED_MIN_CONF,
     classmap: np.ndarray | None = None,
 ) -> list[dict]:
     """
@@ -98,6 +114,9 @@ def detect_land_types_seg(
         image: full-resolution aerial (PIL).
         building_mask, road_mask: full-image binary masks (Overture-derived),
             same H×W as `image`; their union is excluded from land regions.
+        paved_min_conf: confidence gate for paved pixels (see PAVED_MIN_CONF);
+            low-confidence paved is demoted to its best non-paved class. Only
+            applied on the model path (ignored when `classmap` is supplied).
         classmap: TEST/ADVANCED HOOK — a precomputed H×W array of OEM class
             indices. When given, the model is not loaded or run at all (lets
             tests exercise the full polygon pipeline with a synthetic map, and
@@ -111,11 +130,40 @@ def detect_land_types_seg(
     H, W = img_np.shape[:2]
 
     if classmap is None:
-        classmap = _segment_tiled(_get_model(), img_np)
+        prob = _segment_tiled(_get_model(), img_np)     # (C, H, W) softmax
+        classmap = _confident_classmap(prob, paved_min_conf)
     if classmap.shape != (H, W):
         raise ValueError(f"classmap {classmap.shape} != image {(H, W)}")
 
     return _classmap_to_regions(classmap, img_np, building_mask, road_mask)
+
+
+def _confident_classmap(prob: np.ndarray, paved_min_conf: float = PAVED_MIN_CONF) -> np.ndarray:
+    """
+    Argmax a (C, H, W) softmax volume to an (H, W) class map, but demote
+    low-confidence paved pixels to their best non-paved class.
+
+    A paved pixel (argmax in PAVED_IDS) whose winning probability is below
+    `paved_min_conf` is reassigned to the highest-scoring class that is NOT
+    paved — i.e. whatever the model's second-guess is (water at the shoreline,
+    tree in shadow, bare on the beach). Confident paved (real roads/paths) and
+    all non-paved pixels are untouched. `paved_min_conf <= 0` disables the gate.
+    """
+    cls = prob.argmax(axis=0).astype(np.uint8)
+    if paved_min_conf <= 0:
+        return cls
+
+    conf = prob.max(axis=0)
+    weak = np.isin(cls, PAVED_IDS) & (conf < paved_min_conf)
+    if weak.any():
+        # Work only on the weak pixels (small): drop the paved rows so they
+        # can't win, then argmax over the remaining classes. Softmax probs are
+        # >= 0, so -1.0 guarantees the paved classes lose.
+        sub = prob[:, weak].copy()           # (C, n_weak)
+        for pid in PAVED_IDS:
+            sub[pid] = -1.0
+        cls[weak] = sub.argmax(axis=0).astype(np.uint8)
+    return cls
 
 
 def _classmap_to_regions(
@@ -313,7 +361,9 @@ def _tiles(H, W, tile, overlap):
 def _segment_tiled(model, img_rgb: np.ndarray) -> np.ndarray:
     """Tiled inference at ~native resolution (deliberately NOT downscaled to
     1400 px — preserving resolution is what keeps thin pavement). Accumulates
-    per-tile softmax in the overlaps, argmax at the end for seamless class map."""
+    per-tile softmax in the overlaps and returns the averaged (C, H, W)
+    probability volume; the caller argmaxes it (with the paved confidence gate,
+    which needs the probabilities, not a pre-argmaxed class map)."""
     import torch
     import torch.nn.functional as F
 
@@ -338,4 +388,4 @@ def _segment_tiled(model, img_rgb: np.ndarray) -> np.ndarray:
             del t, logits, prob
 
     cnt[cnt == 0] = 1.0
-    return (acc / cnt).argmax(axis=0).astype(np.uint8)
+    return acc / cnt          # (C, H, W) averaged softmax

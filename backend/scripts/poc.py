@@ -269,6 +269,11 @@ def main():
                              "k-means misses, but downloads weights on first use and is "
                              "EVALUATION-ONLY (CC BY-NC-SA training data; see "
                              "docs/land-cover-model-scoping.md)")
+    parser.add_argument("--paved-min-conf", type=float, default=None,
+                        help="segmodel only: confidence gate (0-1) for paved pixels; "
+                             "low-confidence paved is demoted to its best non-paved class "
+                             "to curb shoreline/shadow over-prediction. Default ~0.6; set "
+                             "0 to disable")
     parser.add_argument("--real-buildings", action="store_true",
                         help="Run real SAM2 zero-shot building detection (downloads the "
                              "checkpoint on first run; several minutes of inference)")
@@ -356,8 +361,11 @@ def main():
             if args.land_types_engine == "segmodel":
                 print("Detecting land-cover types (OpenEarthMap SegFormer; "
                       "downloads weights on first use, eval-only)...")
-                from app.pipeline.landtypes_seg import detect_land_types_seg
-                detected = detect_land_types_seg(image, b_mask, r_mask)
+                from app.pipeline.landtypes_seg import (
+                    detect_land_types_seg, PAVED_MIN_CONF,
+                )
+                conf = args.paved_min_conf if args.paved_min_conf is not None else PAVED_MIN_CONF
+                detected = detect_land_types_seg(image, b_mask, r_mask, paved_min_conf=conf)
             else:
                 print("Detecting land-cover types (unsupervised clustering)...")
                 from app.pipeline.landtypes import detect_land_types

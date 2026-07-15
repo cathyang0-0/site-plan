@@ -16,9 +16,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.pipeline.landtypes_seg import (
     detect_land_types_seg,
+    _confident_classmap,
     OEM_TO_OURS,
     OEM_NAMES,
     LABEL_ORDER,
+    PAVED_IDS,
+    N_CLASSES,
 )
 
 # OEM class indices (see OEM_NAMES): 0 unknown, 1 Bareland, 2 Grass, 3 Pavement,
@@ -118,6 +121,65 @@ class TestThinPavementSurvives:
         labels = {r["label"] for r in results}
         assert "paved / hardscape" in labels
         assert "vegetation" in labels
+
+
+def _prob_pixel(weights: dict) -> np.ndarray:
+    """Build a length-N_CLASSES softmax-like vector from {class_idx: weight},
+    normalized to sum to 1. Unlisted classes get ~0."""
+    v = np.full(N_CLASSES, 1e-6, dtype=np.float32)
+    for i, w in weights.items():
+        v[i] = w
+    return v / v.sum()
+
+
+class TestConfidentClassmap:
+    def test_confident_paved_survives(self):
+        # Pavement(3) winning at 0.9 is well above the 0.5 gate -> stays paved.
+        prob = _prob_pixel({3: 0.9, 6: 0.1})[:, None, None]  # (C,1,1)
+        cls = _confident_classmap(prob, paved_min_conf=0.5)
+        assert cls[0, 0] == 3
+
+    def test_low_confidence_paved_demoted_to_runner_up(self):
+        # Road(4) narrowly wins (0.4) over Water(6) at 0.35 -> below gate, so
+        # the pixel becomes Water, not Road.
+        prob = _prob_pixel({4: 0.40, 6: 0.35, 2: 0.25})[:, None, None]
+        cls = _confident_classmap(prob, paved_min_conf=0.5)
+        assert cls[0, 0] == 6  # Water, the best non-paved class
+
+    def test_low_confidence_nonpaved_is_untouched(self):
+        # A low-confidence WATER pixel (0.4) must stay water; the gate only
+        # touches paved, so we don't poke holes in less-peaked water/veg.
+        prob = _prob_pixel({6: 0.40, 2: 0.35, 3: 0.25})[:, None, None]
+        cls = _confident_classmap(prob, paved_min_conf=0.5)
+        assert cls[0, 0] == 6
+
+    def test_gate_disabled_keeps_raw_argmax(self):
+        prob = _prob_pixel({4: 0.40, 6: 0.35})[:, None, None]
+        cls = _confident_classmap(prob, paved_min_conf=0.0)
+        assert cls[0, 0] == 4  # weak paved kept when gate off
+
+    def test_demotion_never_picks_a_paved_class(self):
+        # Even if both paved classes have mass, a demoted pixel lands on a
+        # non-paved class.
+        prob = _prob_pixel({3: 0.30, 4: 0.30, 5: 0.25, 6: 0.15})[:, None, None]
+        cls = _confident_classmap(prob, paved_min_conf=0.5)
+        assert cls[0, 0] not in PAVED_IDS
+
+    def test_mixed_field_only_weak_paved_changes(self):
+        # Three pixels: confident paved, weak paved, confident water.
+        p_conf_paved = _prob_pixel({3: 0.9, 6: 0.1})
+        p_weak_paved = _prob_pixel({4: 0.40, 6: 0.35, 2: 0.25})
+        p_water = _prob_pixel({6: 0.95, 2: 0.05})
+        prob = np.stack([p_conf_paved, p_weak_paved, p_water], axis=1)[:, :, None]  # (C,3,1)
+        cls = _confident_classmap(prob, paved_min_conf=0.5)
+        assert list(cls[:, 0]) == [3, 6, 6]
+
+    def test_returns_uint8_class_map(self):
+        prob = np.random.rand(N_CLASSES, 5, 7).astype(np.float32)
+        prob /= prob.sum(axis=0, keepdims=True)
+        cls = _confident_classmap(prob, paved_min_conf=0.5)
+        assert cls.shape == (5, 7)
+        assert cls.dtype == np.uint8
 
 
 class TestContract:
