@@ -259,9 +259,16 @@ def main():
                              "it (big trees bigger, small trees smaller). Positions are "
                              "unaffected.")
     parser.add_argument("--land-types", action="store_true",
-                        help="Detect land-cover regions (water/vegetation/bare/paved) by "
-                             "unsupervised clustering and hatch them; buildings and roads "
-                             "found in this run are masked out")
+                        help="Detect land-cover regions (water/vegetation/bare/paved) and "
+                             "hatch them; buildings and roads found in this run are masked "
+                             "out. Engine chosen by --land-types-engine")
+    parser.add_argument("--land-types-engine", choices=["kmeans", "segmodel"],
+                        default="kmeans",
+                        help="Land-type engine (default kmeans). 'segmodel' runs a "
+                             "pretrained OpenEarthMap SegFormer that catches thin pavement "
+                             "k-means misses, but downloads weights on first use and is "
+                             "EVALUATION-ONLY (CC BY-NC-SA training data; see "
+                             "docs/land-cover-model-scoping.md)")
     parser.add_argument("--real-buildings", action="store_true",
                         help="Run real SAM2 zero-shot building detection (downloads the "
                              "checkpoint on first run; several minutes of inference)")
@@ -343,11 +350,18 @@ def main():
         # Land types run BEFORE the tree filter so its water regions can
         # suppress trees the detector hallucinated on the lake surface.
         if args.land_types:
-            print("Detecting land-cover types (unsupervised clustering)...")
-            from app.pipeline.landtypes import detect_land_types, default_hatch_style
+            from app.pipeline.landtypes import default_hatch_style
             b_mask = _rasterize_polygons(buildings, img_w, img_h)
             r_mask = _rasterize_roads(roads, img_w, img_h)
-            detected = detect_land_types(image, b_mask, r_mask)
+            if args.land_types_engine == "segmodel":
+                print("Detecting land-cover types (OpenEarthMap SegFormer; "
+                      "downloads weights on first use, eval-only)...")
+                from app.pipeline.landtypes_seg import detect_land_types_seg
+                detected = detect_land_types_seg(image, b_mask, r_mask)
+            else:
+                print("Detecting land-cover types (unsupervised clustering)...")
+                from app.pipeline.landtypes import detect_land_types
+                detected = detect_land_types(image, b_mask, r_mask)
             land_types = [
                 {"label": d["label"], "polygons": d["polygons"],
                  "style": default_hatch_style(d["label"])}
