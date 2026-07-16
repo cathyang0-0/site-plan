@@ -25,9 +25,8 @@ offenders are gone from this path.
 """
 import numpy as np
 from PIL import Image
-from shapely.affinity import scale as _affine_scale
 from shapely.affinity import translate as _affine_translate
-from shapely.geometry import box as _box
+from shapely.geometry import Polygon, MultiPolygon, box as _box
 import cv2
 
 # Reuse the whole polygon-cleanup + export-facing surface unchanged. Labels are
@@ -86,6 +85,19 @@ PAVED_IDS = (3, 4)  # Pavement, Road
 # blobs while the real road/path network survives (paved fraction 0.078 -> 0.059).
 PAVED_MIN_CONF = 0.6
 
+# The model mislabels featureless deep/open water as Bareland — it's
+# out-of-distribution (trained on populated tiles), so whole empty-water tiles
+# flip class (visible as a hard tile seam). That both leaves trees unsuppressed
+# over the "bareland" water AND insets the water region from the page edge
+# (rounded blob instead of flush). Fix at the source: real bareland is warm/
+# brown (R > B); water is blue-shifted (B > R). So any Bareland pixel whose
+# source color is blue-dominant by this margin is reclaimed to Water. Restricted
+# to Bareland (unambiguous — brown-vs-blue); 0 disables.
+WATER_RECLAIM_BLUE_MARGIN = 10
+
+_BARELAND_ID = 1
+_WATER_ID = 6
+
 # --- model / inference config (SegFormer-B2 checkpoint, OEM-fine-tuned) --------
 HF_REPO = "odil111/segformer-fine-tuned-on-openearthmap"
 HF_CKPT = "segformer_sem_seg_2024-05-16--14-40-45/segformer_sem_seg_checkpoint_epoch35.pt"
@@ -104,6 +116,7 @@ def detect_land_types_seg(
     road_mask: np.ndarray,
     *,
     paved_min_conf: float = PAVED_MIN_CONF,
+    water_reclaim_margin: float = WATER_RECLAIM_BLUE_MARGIN,
     classmap: np.ndarray | None = None,
 ) -> list[dict]:
     """
@@ -117,6 +130,8 @@ def detect_land_types_seg(
         paved_min_conf: confidence gate for paved pixels (see PAVED_MIN_CONF);
             low-confidence paved is demoted to its best non-paved class. Only
             applied on the model path (ignored when `classmap` is supplied).
+        water_reclaim_margin: blue-dominance margin for reclaiming mislabeled
+            open water (see WATER_RECLAIM_BLUE_MARGIN); 0 disables.
         classmap: TEST/ADVANCED HOOK — a precomputed H×W array of OEM class
             indices. When given, the model is not loaded or run at all (lets
             tests exercise the full polygon pipeline with a synthetic map, and
@@ -135,7 +150,26 @@ def detect_land_types_seg(
     if classmap.shape != (H, W):
         raise ValueError(f"classmap {classmap.shape} != image {(H, W)}")
 
+    classmap = _reclaim_water(classmap, img_np, water_reclaim_margin)
     return _classmap_to_regions(classmap, img_np, building_mask, road_mask)
+
+
+def _reclaim_water(classmap: np.ndarray, img_np: np.ndarray,
+                   blue_margin: float = WATER_RECLAIM_BLUE_MARGIN) -> np.ndarray:
+    """Reclaim open water the model mislabeled as Bareland: a Bareland pixel
+    whose source color is blue-dominant (B - R > blue_margin) is really water
+    (see WATER_RECLAIM_BLUE_MARGIN). Returns a possibly-new class map; the input
+    is not mutated. `blue_margin <= 0` is a no-op."""
+    if blue_margin <= 0:
+        return classmap
+    R = img_np[..., 0].astype(np.int16)
+    B = img_np[..., 2].astype(np.int16)
+    reclaim = (classmap == _BARELAND_ID) & ((B - R) > blue_margin)
+    if not reclaim.any():
+        return classmap
+    classmap = classmap.copy()
+    classmap[reclaim] = _WATER_ID
+    return classmap
 
 
 def _confident_classmap(prob: np.ndarray, paved_min_conf: float = PAVED_MIN_CONF) -> np.ndarray:
@@ -200,11 +234,20 @@ def _classmap_to_regions(
             mask_u8 = mask.astype(np.uint8) * 255
 
             padded = cv2.copyMakeBorder(mask_u8, pad, pad, pad, pad, cv2.BORDER_REPLICATE)
-            polygons = _mask_to_multipolygon(padded, **_MORPH_BY_LABEL.get(label, {}))
+            # Build FACETED polygons (chaikin off), clip flush to the frame, THEN
+            # smooth with the frame edges protected. Smoothing before clipping
+            # rounds the boundary where it should run flush against the page edge
+            # (the "rounded blob floating off the edge" bug); this order keeps
+            # edge-touching runs straight and only smooths interior corners.
+            polygons = _mask_to_multipolygon(
+                padded, chaikin_iterations=0, **_MORPH_BY_LABEL.get(label, {}))
             if polygons.is_empty:
                 continue
             polygons = _affine_translate(polygons, xoff=-pad, yoff=-pad).intersection(frame)
             polygons = _as_multipolygon(polygons)
+            if polygons.is_empty:
+                continue
+            polygons = _smooth_preserving_frame(polygons, W, H, iterations=2)
             if polygons.is_empty:
                 continue
             results.append({
@@ -213,6 +256,62 @@ def _classmap_to_regions(
                 "thumbnail": _make_thumbnail(img_np, mask_u8),
             })
     return results
+
+
+def _on_frame(p, W, H, tol=1.0) -> bool:
+    """True if point p lies on any of the four frame edges (within tol)."""
+    return (abs(p[0]) <= tol or abs(p[0] - W) <= tol
+            or abs(p[1]) <= tol or abs(p[1] - H) <= tol)
+
+
+def _chaikin_frame_protected(coords: list, W: int, H: int,
+                             iterations: int, tol: float = 1.0) -> list:
+    """Chaikin corner-cutting that leaves the page frame flush. Vertices on a
+    frame edge are anchors: they are never moved, and an edge whose BOTH
+    endpoints are anchors is kept straight (no cut). Interior corners round
+    normally. Input/output are closed rings (first == last)."""
+    pts = coords[:-1] if len(coords) > 1 and coords[0] == coords[-1] else list(coords)
+    if len(pts) < 3:
+        return coords
+    for _ in range(iterations):
+        out, n = [], len(pts)
+        for i in range(n):
+            a, b = pts[i], pts[(i + 1) % n]
+            aa, ab = _on_frame(a, W, H, tol), _on_frame(b, W, H, tol)
+            if aa and ab:                       # frame run: keep straight
+                out.append(a)
+            elif aa:                            # preserve the frame anchor a
+                out.append(a)
+                out.append((0.25 * a[0] + 0.75 * b[0], 0.25 * a[1] + 0.75 * b[1]))
+            elif ab:                            # preserve the frame anchor b
+                out.append((0.75 * a[0] + 0.25 * b[0], 0.75 * a[1] + 0.25 * b[1]))
+                out.append(b)
+            else:                               # interior corner: cut both
+                out.append((0.75 * a[0] + 0.25 * b[0], 0.75 * a[1] + 0.25 * b[1]))
+                out.append((0.25 * a[0] + 0.75 * b[0], 0.25 * a[1] + 0.75 * b[1]))
+        pts = out
+    pts.append(pts[0])
+    return pts
+
+
+def _smooth_preserving_frame(mp: MultiPolygon, W: int, H: int,
+                             iterations: int = 2) -> MultiPolygon:
+    """Apply frame-protected Chaikin smoothing to every ring of a MultiPolygon,
+    so interiors read hand-drawn while any boundary on the page edge stays flush
+    and square. buffer(0) repairs any self-touch the smoothing introduces."""
+    out = []
+    for g in mp.geoms:
+        ext = _chaikin_frame_protected(list(g.exterior.coords), W, H, iterations)
+        holes = [_chaikin_frame_protected(list(r.coords), W, H, iterations)
+                 for r in g.interiors]
+        p = Polygon(ext, holes)
+        if not p.is_valid:
+            p = p.buffer(0)
+        if p.is_empty:
+            continue
+        out.extend([p] if p.geom_type == "Polygon"
+                   else [x for x in p.geoms if not x.is_empty])
+    return MultiPolygon(out) if out else MultiPolygon()
 
 
 # ---------------------------------------------------------------------------

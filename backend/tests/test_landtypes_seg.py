@@ -8,7 +8,7 @@ polygon pipeline.
 import numpy as np
 import pytest
 from PIL import Image
-from shapely.geometry import MultiPolygon
+from shapely.geometry import Polygon, MultiPolygon
 
 import sys
 from pathlib import Path
@@ -17,6 +17,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.pipeline.landtypes_seg import (
     detect_land_types_seg,
     _confident_classmap,
+    _reclaim_water,
+    _smooth_preserving_frame,
     OEM_TO_OURS,
     OEM_NAMES,
     LABEL_ORDER,
@@ -121,6 +123,80 @@ class TestThinPavementSurvives:
         labels = {r["label"] for r in results}
         assert "paved / hardscape" in labels
         assert "vegetation" in labels
+
+
+class TestReclaimWater:
+    def test_blue_bareland_becomes_water(self):
+        # Bareland (1) over a blue-dominant pixel is really open water.
+        cm = np.full((4, 4), 1, dtype=np.uint8)
+        img = np.zeros((4, 4, 3), dtype=np.uint8)
+        img[..., 2] = 200  # blue >> red
+        out = _reclaim_water(cm, img, blue_margin=10)
+        assert (out == 6).all()
+
+    def test_brown_bareland_stays_bareland(self):
+        # Real bareland is warm/brown (R > B) — must NOT be reclaimed.
+        cm = np.full((4, 4), 1, dtype=np.uint8)
+        img = np.zeros((4, 4, 3), dtype=np.uint8)
+        img[..., 0] = 160  # red >> blue
+        img[..., 2] = 90
+        out = _reclaim_water(cm, img, blue_margin=10)
+        assert (out == 1).all()
+
+    def test_only_bareland_is_touched(self):
+        # A blue Grass/Tree pixel must not be flipped — reclaim is bareland-only.
+        cm = np.array([[2, 5]], dtype=np.uint8)  # Grass, Tree
+        img = np.zeros((1, 2, 3), dtype=np.uint8)
+        img[..., 2] = 200
+        out = _reclaim_water(cm, img, blue_margin=10)
+        assert list(out[0]) == [2, 5]
+
+    def test_disabled_is_noop(self):
+        cm = np.full((3, 3), 1, dtype=np.uint8)
+        img = np.zeros((3, 3, 3), dtype=np.uint8); img[..., 2] = 255
+        assert (_reclaim_water(cm, img, blue_margin=0) == 1).all()
+
+    def test_does_not_mutate_input(self):
+        cm = np.full((3, 3), 1, dtype=np.uint8)
+        img = np.zeros((3, 3, 3), dtype=np.uint8); img[..., 2] = 200
+        _reclaim_water(cm, img, blue_margin=10)
+        assert (cm == 1).all()  # original untouched
+
+
+class TestFrameFlush:
+    def test_full_frame_region_is_flush_not_rounded(self):
+        # A water region filling the whole image must polygonize to (nearly) the
+        # frame rectangle: every exterior vertex sits on a frame edge, i.e. the
+        # page edges are straight, not rounded inward.
+        h = w = 200
+        cm = np.full((h, w), 6, dtype=np.uint8)  # all Water
+        results = detect_land_types_seg(_image(h, w), _zeros(h, w), _zeros(h, w), classmap=cm)
+        assert len(results) == 1
+        poly = max(results[0]["polygons"].geoms, key=lambda g: g.area)
+        assert poly.bounds == pytest.approx((0, 0, w, h), abs=1.0)
+        xs = np.array(poly.exterior.coords)
+        on_frame = (np.isclose(xs[:, 0], 0, atol=1) | np.isclose(xs[:, 0], w, atol=1)
+                    | np.isclose(xs[:, 1], 0, atol=1) | np.isclose(xs[:, 1], h, atol=1))
+        assert on_frame.all()  # no vertex pulled inward (no rounding at the edge)
+
+    def test_smooth_preserving_frame_keeps_frame_corner_square(self):
+        # A square filling the frame keeps its 4 corners after smoothing.
+        W = H = 100
+        sq = MultiPolygon([Polygon([(0, 0), (W, 0), (W, H), (0, H), (0, 0)])])
+        out = _smooth_preserving_frame(sq, W, H, iterations=2)
+        coords = set(map(tuple, np.round(np.array(out.geoms[0].exterior.coords)).tolist()))
+        for corner in [(0, 0), (W, 0), (W, H), (0, H)]:
+            assert corner in coords
+
+    def test_interior_region_still_smoothed(self):
+        # A blocky interior region (not touching the frame) should be rounded:
+        # its smoothed corner no longer sits exactly at the original sharp corner.
+        W = H = 300
+        blob = MultiPolygon([Polygon([(100, 100), (200, 100), (200, 200), (100, 200),
+                                      (100, 100)])])
+        out = _smooth_preserving_frame(blob, W, H, iterations=2)
+        coords = set(map(tuple, np.round(np.array(out.geoms[0].exterior.coords)).tolist()))
+        assert (100, 100) not in coords  # interior corner got cut
 
 
 def _prob_pixel(weights: dict) -> np.ndarray:
