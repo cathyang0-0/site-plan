@@ -85,18 +85,23 @@ PAVED_IDS = (3, 4)  # Pavement, Road
 # blobs while the real road/path network survives (paved fraction 0.078 -> 0.059).
 PAVED_MIN_CONF = 0.6
 
-# The model mislabels featureless deep/open water as Bareland — it's
-# out-of-distribution (trained on populated tiles), so whole empty-water tiles
-# flip class (visible as a hard tile seam). That both leaves trees unsuppressed
-# over the "bareland" water AND insets the water region from the page edge
-# (rounded blob instead of flush). Fix at the source: real bareland is warm/
-# brown (R > B); water is blue-shifted (B > R). So any Bareland pixel whose
-# source color is blue-dominant by this margin is reclaimed to Water. Restricted
-# to Bareland (unambiguous — brown-vs-blue); 0 disables.
+# The model mislabels featureless deep/open water as land — out-of-distribution
+# (trained on populated tiles), so whole empty-water tiles flip class (visible
+# as a hard tile seam), variously to Bareland, Grass, Tree or Cropland. That
+# both leaves trees unsuppressed over the mislabeled water AND insets the water
+# region from the page edge (rounded blob instead of flush). Fix at the source
+# by color: open water is strongly blue-shifted (measured B - R ≈ +40 here,
+# whether the model called it bareland or grass), while REAL vegetation/bare
+# earth is not (land grass B - R ≈ -1, trees ≈ +5, brown bareland negative). So
+# any natural-cover pixel that is blue-dominant by this margin is reclaimed to
+# Water. The +40 vs ~0 gap makes margin 10 safe for real land. 0 disables.
 WATER_RECLAIM_BLUE_MARGIN = 10
 
-_BARELAND_ID = 1
 _WATER_ID = 6
+# Natural-cover classes the model confuses with open water. Reclaimed to Water
+# when blue-dominant. Excludes Pavement/Road (gray, never blue — and paved has
+# its own confidence gate) and buildings/unknown (dropped downstream anyway).
+_RECLAIMABLE_TO_WATER = (1, 2, 5, 7)  # Bareland, Grass, Tree, Cropland
 
 # --- model / inference config (SegFormer-B2 checkpoint, OEM-fine-tuned) --------
 HF_REPO = "odil111/segformer-fine-tuned-on-openearthmap"
@@ -156,15 +161,16 @@ def detect_land_types_seg(
 
 def _reclaim_water(classmap: np.ndarray, img_np: np.ndarray,
                    blue_margin: float = WATER_RECLAIM_BLUE_MARGIN) -> np.ndarray:
-    """Reclaim open water the model mislabeled as Bareland: a Bareland pixel
-    whose source color is blue-dominant (B - R > blue_margin) is really water
-    (see WATER_RECLAIM_BLUE_MARGIN). Returns a possibly-new class map; the input
-    is not mutated. `blue_margin <= 0` is a no-op."""
+    """Reclaim open water the model mislabeled as land: a natural-cover pixel
+    (see _RECLAIMABLE_TO_WATER) whose source color is blue-dominant
+    (B - R > blue_margin) is really water (see WATER_RECLAIM_BLUE_MARGIN).
+    Returns a possibly-new class map; the input is not mutated. `blue_margin
+    <= 0` is a no-op."""
     if blue_margin <= 0:
         return classmap
     R = img_np[..., 0].astype(np.int16)
     B = img_np[..., 2].astype(np.int16)
-    reclaim = (classmap == _BARELAND_ID) & ((B - R) > blue_margin)
+    reclaim = np.isin(classmap, _RECLAIMABLE_TO_WATER) & ((B - R) > blue_margin)
     if not reclaim.any():
         return classmap
     classmap = classmap.copy()

@@ -143,13 +143,32 @@ class TestReclaimWater:
         out = _reclaim_water(cm, img, blue_margin=10)
         assert (out == 1).all()
 
-    def test_only_bareland_is_touched(self):
-        # A blue Grass/Tree pixel must not be flipped — reclaim is bareland-only.
+    def test_blue_grass_and_tree_become_water(self):
+        # Open water the model called Grass/Tree/Cropland is just as blue as
+        # water, so blue-dominant natural cover is reclaimed too (not just bare).
+        cm = np.array([[2, 5, 7]], dtype=np.uint8)  # Grass, Tree, Cropland
+        img = np.zeros((1, 3, 3), dtype=np.uint8)
+        img[..., 2] = 200  # blue >> red
+        out = _reclaim_water(cm, img, blue_margin=10)
+        assert list(out[0]) == [6, 6, 6]
+
+    def test_real_green_vegetation_is_not_reclaimed(self):
+        # Real grass/trees are green-dominant, not blue (B - R ~ 0), so they
+        # stay put — the +40 vs ~0 gap is what keeps this safe.
         cm = np.array([[2, 5]], dtype=np.uint8)  # Grass, Tree
+        img = np.zeros((1, 2, 3), dtype=np.uint8)
+        img[..., 0] = 95; img[..., 1] = 115; img[..., 2] = 92  # green-dominant
+        out = _reclaim_water(cm, img, blue_margin=10)
+        assert list(out[0]) == [2, 5]
+
+    def test_paved_class_is_not_reclaimed(self):
+        # Even a (hypothetically) blue Pavement pixel stays paved — reclaim is
+        # restricted to natural-cover classes.
+        cm = np.array([[3, 4]], dtype=np.uint8)  # Pavement, Road
         img = np.zeros((1, 2, 3), dtype=np.uint8)
         img[..., 2] = 200
         out = _reclaim_water(cm, img, blue_margin=10)
-        assert list(out[0]) == [2, 5]
+        assert list(out[0]) == [3, 4]
 
     def test_disabled_is_noop(self):
         cm = np.full((3, 3), 1, dtype=np.uint8)
