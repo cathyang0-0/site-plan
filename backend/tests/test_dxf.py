@@ -142,11 +142,11 @@ class TestLayerStackingAndAnnotations:
         names = [layer.dxf.name for layer in doc.layers]
         assert names.index("ROOFS") > names.index("LANDTYPE_1")
 
-    def test_hatch_stops_short_of_building_outline(self, tmp_path):
-        # The land hatch boundary must not touch the footprint polygon: it is
-        # clipped HATCH_CLIP_MARGIN_M clear of it so the roof outline stroke
-        # is never painted over (building edge at x=480px -> -6.0 m; margin
-        # 0.4 m -> hatch hole edge at <= -6.4 m).
+    def test_hatch_boundary_aligns_exactly_with_building(self, tmp_path):
+        # The land hatch is clipped exactly on the footprint polygon — no
+        # retreat margin (geometries must stay perfectly aligned; the outline-
+        # weight problem is solved by the Z staircase, not by a gap).
+        # Building edge at x=480px, origin 500, scale 0.3 -> exactly -6.0 m.
         doc = _export_with_landtype(tmp_path)
         h = [h for h in doc.modelspace().query("HATCH")
              if h.dxf.layer == "LANDTYPE_1"][0]
@@ -156,7 +156,33 @@ class TestLayerStackingAndAnnotations:
                 xs = [v[0] for v in path.vertices]
                 if -30 < min(xs) and max(xs) < 30:   # the building-hole path
                     hole_xs = xs
-        assert hole_xs and min(hole_xs) <= -6.39
+        assert hole_xs and abs(min(hole_xs) - (-6.0)) < 1e-6
+
+    def test_z_staircase_fills_below_linework(self, tmp_path):
+        # DXF can't carry Rhino draw order (BringToFront is Rhino-side, and
+        # Rhino ignores SORTENTSTABLE), so fills are sunk slightly below the
+        # z=0 drawing plane: land hatches lowest, roof fill above them, all
+        # linework on top. Depth-tested viewers then always draw outlines over
+        # hatches, with XY untouched.
+        from app.export.dxf import LAND_HATCH_Z, ROOF_FILL_Z
+        assert LAND_HATCH_Z < ROOF_FILL_Z < 0
+        doc = _export_with_landtype(tmp_path)
+        msp = doc.modelspace()
+        land = [h for h in msp.query("HATCH") if h.dxf.layer == "LANDTYPE_1"][0]
+        fill = [h for h in msp.query("HATCH") if h.dxf.layer == "ROOFS_FILL"][0]
+        assert abs(land.dxf.elevation.z - LAND_HATCH_Z) < 1e-9
+        assert abs(fill.dxf.elevation.z - ROOF_FILL_Z) < 1e-9
+        outline = [e for e in msp.query("LWPOLYLINE") if e.dxf.layer == "ROOFS"][0]
+        assert outline.dxf.elevation == 0.0  # linework stays on the plane
+
+    def test_scale_bar_is_single_square_wave(self, tmp_path):
+        # Reference style: one continuous alternating outline — no closed
+        # boxes, no baseline doubled under the raised segments.
+        doc = _export_with_landtype(tmp_path)
+        bars = [e for e in doc.modelspace().query("LWPOLYLINE")
+                if e.dxf.layer == "SCALEBAR"]
+        assert len(bars) == 1
+        assert not bars[0].closed
 
     def test_scale_bar_present_bottom_right(self, tmp_path):
         doc = _export_with_landtype(tmp_path)

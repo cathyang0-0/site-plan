@@ -40,13 +40,16 @@ DEFAULT_FILLET_RADIUS_M = 3.0
 HATCH_LINEWEIGHT = 5          # 0.05 mm (thinnest valid DXF lineweight)
 HATCH_RGB = (200, 200, 200)   # light gray
 
-# Keep land-type hatches this far (meters) clear of building/road outlines.
-# The hatch boundary used to sit exactly on the footprint polygon — i.e. on the
-# CENTERLINE of the outline stroke — so viewers that draw hatches above curves
-# (Rhino does) painted pattern lines over the outer half of the roof outline,
-# visually thinning it. Retreating the hatch a little past the stroke leaves the
-# outline at full weight in every viewer, regardless of its draw-order rules.
-HATCH_CLIP_MARGIN_M = 0.4
+# Z staircase: force fills below linework WITHOUT touching XY geometry.
+# DXF cannot carry Rhino's per-object draw order (BringToFront is a Rhino
+# attribute; Rhino ignores DXF's SORTENTSTABLE on import), so coplanar hatches
+# and curves z-fight and hatch pattern lines can render over the roof outline
+# stroke, visually thinning it. Sinking the land hatches slightly below the
+# drawing plane and the white roof fills just above them makes every depth-
+# tested viewer draw curves (at z=0) on top deterministically. Centimeters of
+# depth are invisible in plan and boundaries stay perfectly aligned in XY.
+LAND_HATCH_Z = -0.10
+ROOF_FILL_Z = -0.05
 
 # Scale bar: target fraction of the site width; snapped to a nice round length.
 SCALE_BAR_FRACTION = 0.15
@@ -206,14 +209,12 @@ def export_dxf(
     road_network = road_network if road_network is not None and not road_network.is_empty else None
 
     # Anything a land-type region should never be drawn under -- buildings
-    # (masked by roof fill) and now roads (pavement, not ground cover) --
-    # expanded by HATCH_CLIP_MARGIN_M so pattern lines stop short of the
-    # outline stroke instead of ending on its centerline (see the constant).
+    # (masked by roof fill) and now roads (pavement, not ground cover).
+    # Clipped exactly, boundary-on-boundary; the outline-weight problem is
+    # solved by the Z staircase (LAND_HATCH_Z), not by retreating the hatch.
     landtype_clip = unary_union(
         [g for g in (buildings_union, road_network) if g is not None]
     ) if (buildings_union is not None or road_network is not None) else None
-    if landtype_clip is not None:
-        landtype_clip = landtype_clip.buffer(HATCH_CLIP_MARGIN_M / scale_m_per_px)
 
     # --- Land type hatches (drawn first — bottommost), one layer per type ---
     for i, lt in enumerate(land_types):
@@ -292,7 +293,11 @@ def export_dxf(
     # --- Roofs: white fill hatch (masks everything below) ---
     for poly in buildings:
         pts = poly_pts(poly)
-        hatch = msp.add_hatch(color=255, dxfattribs={"layer": "ROOFS_FILL"})  # ACI 255 = true white, never swaps
+        hatch = msp.add_hatch(color=255, dxfattribs={
+            "layer": "ROOFS_FILL",  # ACI 255 = true white, never swaps
+            # Above the land hatches but still below all linework (Z staircase).
+            "elevation": (0, 0, ROOF_FILL_Z),
+        })
         hatch.paths.add_polyline_path(pts, is_closed=True)
         hatch.set_pattern_fill("SOLID")
 
@@ -493,6 +498,9 @@ def _draw_multipolygon_hatches(msp, mpoly, poly_rings_fn, layer_name: str, lt_st
         hatch = msp.add_hatch(dxfattribs={
             "layer": layer_name,
             "lineweight": HATCH_LINEWEIGHT,
+            # Below the drawing plane so linework always wins the depth test
+            # (see LAND_HATCH_Z) — XY stays exactly on the region boundary.
+            "elevation": (0, 0, LAND_HATCH_Z),
         })
         hatch.rgb = _hex_to_rgb(lt_style.get("hatch_color")) if lt_style.get("hatch_color") else HATCH_RGB
         hatch.paths.add_polyline_path(exterior, is_closed=True)
@@ -553,7 +561,7 @@ def _draw_scale_bar(msp, doc, extents):
     total = _nice_round(width * SCALE_BAR_FRACTION)
     unit = total / 10.0                      # five labelled units in first half
     box_h = 0.04 * total
-    text_h = max(1.5, 0.035 * total)
+    text_h = max(1.5, 0.05 * total)
 
     x1 = extents.extmax.x                    # right-aligned with the drawing
     x0 = x1 - total
@@ -562,15 +570,18 @@ def _draw_scale_bar(msp, doc, extents):
     _add_layer(doc, "SCALEBAR", "#000000", 0.18)
     attribs = {"layer": "SCALEBAR"}
 
-    msp.add_lwpolyline([(x0, y), (x1, y)], dxfattribs=attribs)          # baseline
-    msp.add_lwpolyline([(x0, y), (x0, y + box_h)], dxfattribs=attribs)  # end ticks
-    msp.add_lwpolyline([(x1, y), (x1, y + box_h)], dxfattribs=attribs)
-    for i in (0, 2, 4):                      # alternating raised unit boxes
+    # One continuous square-wave outline (per the user's reference): the line
+    # alternates between the raised top (over units 1, 3 and 5) and the
+    # baseline — no baseline runs under a raised segment, no closed boxes.
+    up, dn = y + box_h, y
+    pts = [(x0, dn), (x0, up)]               # start tick
+    for i in (0, 2, 4):
         bx0, bx1 = x0 + i * unit, x0 + (i + 1) * unit
-        msp.add_lwpolyline(
-            [(bx0, y), (bx0, y + box_h), (bx1, y + box_h), (bx1, y)],
-            close=True, dxfattribs=attribs,
-        )
+        pts += [(bx0, up), (bx1, up), (bx1, dn)]          # across the top, down
+        nxt = x0 + (i + 2) * unit if i < 4 else x1
+        pts += [(nxt, dn)]                                # along the baseline
+    pts += [(x1, up)]                        # end tick
+    msp.add_lwpolyline(pts, dxfattribs=attribs)
 
     for i in range(6):                       # 0..5 unit labels
         label = f"{i * unit:g}"
