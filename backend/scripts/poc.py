@@ -285,13 +285,16 @@ def main():
                         help="Fetch road centerlines from Overture Maps (class-based "
                              "width, nudged by a light CV pavement measurement); "
                              "requires --bbox")
+    parser.add_argument("--footprint-water", action="store_true",
+                        help="Fetch water bodies (lakes + buffered rivers) from Overture "
+                             "Maps; requires --bbox")
     parser.add_argument("--bbox", type=str, default=None,
                         help="Geographic extent of the image as WEST,SOUTH,EAST,NORTH "
                              "(lon/lat); the image must span exactly this bbox")
     args = parser.parse_args()
 
-    if (args.footprint_buildings or args.footprint_roads) and not args.bbox:
-        parser.error("--footprint-buildings/--footprint-roads require --bbox")
+    if (args.footprint_buildings or args.footprint_roads or args.footprint_water) and not args.bbox:
+        parser.error("--footprint-buildings/--footprint-roads/--footprint-water require --bbox")
 
     image_path = Path(args.image)
     if not image_path.exists():
@@ -307,9 +310,10 @@ def main():
 
     attributions = []
     if (args.real_trees or args.real_buildings or args.footprint_buildings
-            or args.footprint_roads or args.land_types):
+            or args.footprint_roads or args.footprint_water or args.land_types):
         buildings = []
         roads = []
+        water_polys = []
         land_types = []
         tree_placements = []
         detections = []
@@ -352,6 +356,20 @@ def main():
                 # (Footprint buildings are authoritative -- no cross-filter.)
                 buildings = suppress_canopy_false_positives(buildings, detections)
                 print(f"  Buildings after canopy cross-filter: {len(buildings)}")
+        if args.footprint_water:
+            print("Fetching water footprints (Overture Maps)...")
+            from app.pipeline.water import fetch_water_footprints, ATTRIBUTION as WATER_ATTR
+            from app.pipeline.footprints import footprints_to_pixels
+            west, south, east, north = (float(v) for v in args.bbox.split(","))
+            geo_polys = fetch_water_footprints(west, south, east, north)
+            water_px = footprints_to_pixels(
+                geo_polys, west, south, east, north, img_w, img_h
+            )
+            attributions.append(WATER_ATTR)
+            from shapely.ops import unary_union
+            merged = unary_union(water_px)          # dissolve overlaps into one clean region
+            water_polys = list(merged.geoms) if merged.geom_type == "MultiPolygon" else [merged]
+            print(f"  Water footprints fetched: {len(water_polys)}")
         # Land types run BEFORE the tree filter so its water regions can
         # suppress trees the detector hallucinated on the lake surface.
         if args.land_types:
@@ -375,17 +393,25 @@ def main():
                  "style": default_hatch_style(d["label"])}
                 for d in detected
             ]
+            if water_polys:  # Overture water is authoritative — swap out the seg water
+                land_types = [lt for lt in land_types if lt["label"] != "water"]
+                land_types.insert(0, {
+                    "label": "water",
+                    "polygons": MultiPolygon(water_polys),
+                    "style": default_hatch_style("water"),
+                })
             print(f"  Land types: {', '.join(d['label'] for d in land_types)}")
         if args.real_trees:
             # >30% building-overlap rule suppresses rooftop tree detections.
             accepted = filter_placements(detections, building_polygons=buildings)
             # Drop trees the detector placed on open water (wave/reflection
             # false positives), using the detected water regions.
-            water_polys = [
-                g for lt in land_types if lt["label"] == "water"
-                for g in (lt["polygons"].geoms if hasattr(lt["polygons"], "geoms")
-                          else [lt["polygons"]])
-            ]
+            if not water_polys:   # already have Overture water? keep it; else derive from land_types
+                water_polys = [
+                    g for lt in land_types if lt["label"] == "water"
+                    for g in (lt["polygons"].geoms if hasattr(lt["polygons"], "geoms")
+                              else [lt["polygons"]])
+                ]
             if water_polys:
                 before = len(accepted)
                 accepted = suppress_over_water(accepted, water_polys)
