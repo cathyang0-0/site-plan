@@ -395,6 +395,17 @@ def main():
             ]
             if water_polys:  # Overture water is authoritative — swap out the seg water
                 land_types = [lt for lt in land_types if lt["label"] != "water"]
+                # The engine also mislabels open water as vegetation/bare/paved
+                # (OOD tiles), leaving those covers floating on the lake. The
+                # authoritative water outranks them too: carve it out of every
+                # remaining land type, dropping types it swallows whole.
+                from shapely.ops import unary_union as _uu
+                from app.pipeline.landtypes import _as_multipolygon
+                water_union = _uu(water_polys)
+                for lt in land_types:
+                    lt["polygons"] = _as_multipolygon(
+                        lt["polygons"].difference(water_union))
+                land_types = [lt for lt in land_types if not lt["polygons"].is_empty]
                 land_types.insert(0, {
                     "label": "water",
                     "polygons": MultiPolygon(water_polys),

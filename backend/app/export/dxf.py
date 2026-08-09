@@ -40,6 +40,17 @@ DEFAULT_FILLET_RADIUS_M = 3.0
 HATCH_LINEWEIGHT = 5          # 0.05 mm (thinnest valid DXF lineweight)
 HATCH_RGB = (200, 200, 200)   # light gray
 
+# Keep land-type hatches this far (meters) clear of building/road outlines.
+# The hatch boundary used to sit exactly on the footprint polygon — i.e. on the
+# CENTERLINE of the outline stroke — so viewers that draw hatches above curves
+# (Rhino does) painted pattern lines over the outer half of the roof outline,
+# visually thinning it. Retreating the hatch a little past the stroke leaves the
+# outline at full weight in every viewer, regardless of its draw-order rules.
+HATCH_CLIP_MARGIN_M = 0.4
+
+# Scale bar: target fraction of the site width; snapped to a nice round length.
+SCALE_BAR_FRACTION = 0.15
+
 # $SORTENTS (header var 280) bitcode -- which operations respect the explicit
 # SORTENTSTABLE redraw order instead of raw entity/handle order:
 #   1 = object selection, 2 = object snap, 16 = REGEN, 32 = plotting/printing
@@ -143,26 +154,31 @@ def export_dxf(
 
     # --- Layers ---
     # Each land type gets its OWN layer (LANDTYPE_1, LANDTYPE_2, ...) so the
-    # user can restyle or toggle each ground cover independently. Created in
-    # the land-type loop below (one per detected type).
-    # Other layers' lineweights come from the caller's style dict when
-    # provided, falling back to the spec.md §5 architectural defaults.
-    _add_layer(
-        doc, "ROADS",
-        style.get("roads", {}).get("color", "#333333"),
-        style.get("roads", {}).get("line_weight_mm", DEFAULT_LINE_WEIGHT_MM["ROADS"]),
-    )
-    _add_layer(
-        doc, "TREES",
-        style.get("trees", {}).get("color", "#333333"),
-        style.get("trees", {}).get("line_weight_mm", DEFAULT_LINE_WEIGHT_MM["TREES"]),
-    )
-    _add_layer(doc, "ROOFS_FILL", "#ffffff", 0.0, aci=255)  # true white, never swaps with background
-    _add_layer(
-        doc, "ROOFS",
-        style.get("roofs", {}).get("color", "#000000"),
-        style.get("roofs", {}).get("line_weight_mm", DEFAULT_LINE_WEIGHT_MM["ROOFS"]),
-    )
+    # user can restyle or toggle each ground cover independently (created in
+    # the land-type loop below, one per detected type). The layer TABLE is
+    # built strictly bottom-to-top — land types first, ROOFS last — mirroring
+    # the entity order, because some viewers break draw-order ties between
+    # coincident objects by layer position; ROOFS being the topmost layer is
+    # what keeps roof outlines at full weight over adjacent hatches.
+    # Layer lineweights come from the caller's style dict when provided,
+    # falling back to the spec.md §5 architectural defaults.
+    def _add_upper_layers():
+        _add_layer(
+            doc, "ROADS",
+            style.get("roads", {}).get("color", "#333333"),
+            style.get("roads", {}).get("line_weight_mm", DEFAULT_LINE_WEIGHT_MM["ROADS"]),
+        )
+        _add_layer(
+            doc, "TREES",
+            style.get("trees", {}).get("color", "#333333"),
+            style.get("trees", {}).get("line_weight_mm", DEFAULT_LINE_WEIGHT_MM["TREES"]),
+        )
+        _add_layer(doc, "ROOFS_FILL", "#ffffff", 0.0, aci=255)  # true white, never swaps with background
+        _add_layer(
+            doc, "ROOFS",
+            style.get("roofs", {}).get("color", "#000000"),
+            style.get("roofs", {}).get("line_weight_mm", DEFAULT_LINE_WEIGHT_MM["ROOFS"]),
+        )
 
     # Roof-fill "masking" (relying on CAD draw order/SORTENTSTABLE to paint
     # the white roof fill over anything underneath) has proven unreliable
@@ -190,10 +206,14 @@ def export_dxf(
     road_network = road_network if road_network is not None and not road_network.is_empty else None
 
     # Anything a land-type region should never be drawn under -- buildings
-    # (masked by roof fill) and now roads (pavement, not ground cover).
+    # (masked by roof fill) and now roads (pavement, not ground cover) --
+    # expanded by HATCH_CLIP_MARGIN_M so pattern lines stop short of the
+    # outline stroke instead of ending on its centerline (see the constant).
     landtype_clip = unary_union(
         [g for g in (buildings_union, road_network) if g is not None]
     ) if (buildings_union is not None or road_network is not None) else None
+    if landtype_clip is not None:
+        landtype_clip = landtype_clip.buffer(HATCH_CLIP_MARGIN_M / scale_m_per_px)
 
     # --- Land type hatches (drawn first — bottommost), one layer per type ---
     for i, lt in enumerate(land_types):
@@ -211,6 +231,10 @@ def export_dxf(
             _draw_multipolygon_outlines(msp, polygons, poly_rings, layer_name)
         else:
             _draw_multipolygon_hatches(msp, polygons, poly_rings, layer_name, lt_style)
+
+    # Upper layers registered only now, so they land ABOVE every LANDTYPE_*
+    # layer in the table (see the layer-order comment above).
+    _add_upper_layers()
 
     # --- Roads ---
     if road_network is not None:
@@ -277,20 +301,25 @@ def export_dxf(
         pts = poly_pts(poly)
         msp.add_lwpolyline(pts, close=True, dxfattribs={"layer": "ROOFS"})
 
-    # --- Data attribution note (license requirement, e.g. Overture/ODbL) ---
-    if attribution:
+    # --- Margin annotations: attribution (bottom-left) + scale bar (bottom-
+    # right), both placed against the drawing extents computed BEFORE either
+    # is added so they don't feed back into each other's placement. ---
+    extents = ezdxf.bbox.extents(msp, fast=True)
+
+    if attribution and extents.has_data:
         _add_layer(doc, "NOTES", "#999999", 0.05)
-        extents = ezdxf.bbox.extents(msp, fast=True)
-        if extents.has_data:
-            text = msp.add_text(
-                attribution,
-                height=3.0,  # meters; legible at typical context-plan scales
-                dxfattribs={"layer": "NOTES"},
-            )
-            text.set_placement(
-                (extents.extmin.x, extents.extmin.y - 6.0),
-                align=TextEntityAlignment.TOP_LEFT,
-            )
+        text = msp.add_text(
+            attribution,
+            height=3.0,  # meters; legible at typical context-plan scales
+            dxfattribs={"layer": "NOTES"},
+        )
+        text.set_placement(
+            (extents.extmin.x, extents.extmin.y - 6.0),
+            align=TextEntityAlignment.TOP_LEFT,
+        )
+
+    if extents.has_data:
+        _draw_scale_bar(msp, doc, extents)
 
     # Entities are already added bottom-to-top in the order above, but some
     # viewers regenerate by entity type rather than raw insertion order
@@ -304,6 +333,12 @@ def export_dxf(
     msp.set_redraw_order({
         entity.dxf.handle: f"{i:X}" for i, entity in enumerate(msp)
     })
+
+    # Declare real-world units: modelspace is meters. Without $INSUNITS a DXF
+    # is unitless and importers guess (Rhino defaulted to mm, shrinking the
+    # whole site 1000x on import — a tree read as "10 mm"). 6 = meters.
+    doc.header["$INSUNITS"] = 6
+    doc.header["$MEASUREMENT"] = 1  # metric
 
     doc.saveas(str(output_path))
 
@@ -469,6 +504,17 @@ def _draw_multipolygon_hatches(msp, mpoly, poly_rings_fn, layer_name: str, lt_st
 
         if hatch_type == "solid":
             hatch.set_pattern_fill("SOLID")
+        elif hatch_type == "acad":
+            # Reproduce a hand-tuned AutoCAD pattern exactly: the definition
+            # lines (from landtypes.ACAD_PATTERNS) are baked in drawing units
+            # with rotation/spacing pre-applied, so scale/angle must stay at
+            # identity — any other value would double-transform the pattern.
+            from app.pipeline.landtypes import ACAD_PATTERNS
+            name = lt_style["hatch_pattern"]
+            hatch.set_pattern_fill(
+                name, scale=1.0, angle=0.0,
+                definition=ACAD_PATTERNS[name],
+            )
         elif hatch_type == "lines":
             hatch.set_pattern_fill("LINE", scale=scale, angle=angle)
         elif hatch_type == "crosshatch":
@@ -480,3 +526,56 @@ def _draw_multipolygon_hatches(msp, mpoly, poly_rings_fn, layer_name: str, lt_st
             hatch.set_pattern_fill("DOTS", scale=scale)
         else:
             pass  # outline only — no hatch entity
+
+
+def _nice_round(x: float) -> float:
+    """Snap x to the nearest 'nice' drawing number (1, 2 or 5 x 10^k)."""
+    from math import floor, log10
+    if x <= 0:
+        return 1.0
+    exp = floor(log10(x))
+    candidates = [n * 10 ** exp for n in (1, 2, 5, 10)]
+    return min(candidates, key=lambda c: abs(c - x))
+
+
+def _draw_scale_bar(msp, doc, extents):
+    """
+    Architect-style alternating scale bar at the bottom-right of the drawing.
+
+    Sized to a nice round length (~SCALE_BAR_FRACTION of the site width) so it
+    stays proportionate at any site size. Graphic follows the reference style:
+    a baseline with end ticks, the first half subdivided into five units with
+    alternating raised boxes (over units 1, 3 and 5), the second half a single
+    plain run; numeric labels under each subdivision and the total labelled
+    with its unit. Drawn in model units (meters) so it scales with the plan.
+    """
+    width = extents.extmax.x - extents.extmin.x
+    total = _nice_round(width * SCALE_BAR_FRACTION)
+    unit = total / 10.0                      # five labelled units in first half
+    box_h = 0.04 * total
+    text_h = max(1.5, 0.035 * total)
+
+    x1 = extents.extmax.x                    # right-aligned with the drawing
+    x0 = x1 - total
+    y = extents.extmin.y - 8.0               # just below the site, clear of it
+
+    _add_layer(doc, "SCALEBAR", "#000000", 0.18)
+    attribs = {"layer": "SCALEBAR"}
+
+    msp.add_lwpolyline([(x0, y), (x1, y)], dxfattribs=attribs)          # baseline
+    msp.add_lwpolyline([(x0, y), (x0, y + box_h)], dxfattribs=attribs)  # end ticks
+    msp.add_lwpolyline([(x1, y), (x1, y + box_h)], dxfattribs=attribs)
+    for i in (0, 2, 4):                      # alternating raised unit boxes
+        bx0, bx1 = x0 + i * unit, x0 + (i + 1) * unit
+        msp.add_lwpolyline(
+            [(bx0, y), (bx0, y + box_h), (bx1, y + box_h), (bx1, y)],
+            close=True, dxfattribs=attribs,
+        )
+
+    for i in range(6):                       # 0..5 unit labels
+        label = f"{i * unit:g}"
+        t = msp.add_text(label, height=text_h, dxfattribs=attribs)
+        t.set_placement((x0 + i * unit, y - text_h * 0.5),
+                        align=TextEntityAlignment.TOP_CENTER)
+    t = msp.add_text(f"{total:g} m", height=text_h, dxfattribs=attribs)
+    t.set_placement((x1, y - text_h * 0.5), align=TextEntityAlignment.TOP_CENTER)

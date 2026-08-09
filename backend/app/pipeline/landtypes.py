@@ -36,16 +36,61 @@ CLUSTER_LABELS = ["water", "vegetation", "bare earth / farmland", "paved / hards
 # the one step needing active judgment). hatch_scale is an explicit override
 # in real-world-meter modelspace (the mm->scale auto-conversion isn't wired
 # yet, see dxf.py), tuned to read at typical site scales.
+# AutoCAD-style hatch pattern definitions, extracted verbatim from the user's
+# hand-tuned reference plan ("hatch reference.dxf", 2026-08) and baked in so the
+# export reproduces that exact look in any viewer, independent of each CAD app's
+# own pattern library (acad.pat imperial/metric variants differ). The reference
+# file shares this pipeline's units (tree block width 12.0 both sides), so these
+# values are already calibrated relative to trees/buildings/roads — use with
+# scale=1.0, angle=0.0 (rotation/scale are pre-applied in the numbers below).
+# Format per line: [angle_deg, (base_x, base_y), (offset_x, offset_y), [dashes]]
+# (dash > 0 draw, < 0 gap, 0 dot; empty list = continuous line).
+ACAD_PATTERNS = {
+    # Water: AR-RROOF at reference scale 10 — long broken horizontal strokes.
+    "AR-RROOF": [
+        [0.0, (0.0, 0.0), (22.0, 10.0), [150.0, -20.0, 50.0, -10.0]],
+        [0.0, (13.3, 5.0), (-10.0, 13.3), [30.0, -3.3, 60.0, -7.5]],
+        [0.0, (5.0, 8.5), (52.0, 6.7), [80.0, -14.0, 40.0, -10.0]],
+    ],
+    # Vegetation: AR-SAND at reference scale 3.5 — irregular dot stipple.
+    "AR-SAND": [
+        [37.5, (0.0, 0.0), (-0.220477, 6.74388), [0.0, -5.32, 0.0, -5.95, 0.0, -5.6875]],
+        [7.5, (0.0, 0.0), (6.19422, 9.87751), [0.0, -2.87, 0.0, -4.795, 0.0, -1.8375]],
+        [327.5, (-4.3, 0.0), (10.8995, 0.0198067), [0.0, -1.75, 0.0, -6.3, 0.0, -8.225]],
+        [317.5, (-4.3, 0.0), (10.5214, 3.07186), [0.0, -0.875, 0.0, -4.13, 0.0, -4.725]],
+    ],
+    # Bare earth / farmland: plain 45° lines, 3.81 m apart (LINE at scale 1.2).
+    "LINE45": [
+        [45.0, (0.0, 0.0), (-2.69408, 2.69408), []],
+    ],
+    # Paved: AR-CONC at reference scale 1.0 — fine aggregate speckle.
+    "AR-CONC": [
+        [50.0, (0.0, 0.0), (7.1726, -0.627521), [0.75, -8.25]],
+        [355.0, (0.0, 0.0), (-1.38751, 7.52192), [0.6, -6.6]],
+        [100.4514, (0.6, -0.0522934), (5.78509, 6.8944), [0.637402, -7.011421]],
+        [46.1842, (0.0, 2.0), (10.6724, -1.65519), [1.125, -12.375]],
+        [96.6356, (0.9, 1.86207), (9.34662, 9.74119), [0.956103, -10.517138]],
+        [351.1842, (0.0, 2.0), (9.34662, 9.74119), [0.9, -9.9]],
+        [21.0, (1.0, 1.5), (5.96907, -4.02619), [0.75, -8.25]],
+        [326.0, (1.0, 1.5), (2.43315, 7.2515), [0.6, -6.6]],
+        [71.4514, (1.5, 1.16448), (8.40222, 3.22531), [0.637402, -7.011421]],
+        [37.5, (0.0, 0.0), (0.121599, 3.32894), [0.0, -6.52, 0.0, -6.7, 0.0, -6.625]],
+        [7.5, (0.0, 0.0), (2.6307, 3.94412), [0.0, -3.82, 0.0, -6.37, 0.0, -2.525]],
+        [327.5, (-2.2, 0.0), (5.33822, -0.225549), [0.0, -2.5, 0.0, -7.8, 0.0, -10.35]],
+        [317.5, (-3.2, 0.0), (5.83186, 1.00105), [0.0, -3.25, 0.0, -5.18, 0.0, -7.35]],
+    ],
+}
+
 DEFAULT_HATCH_STYLES = {
-    "water":                 {"hatch_type": "lines", "hatch_angle_deg": 0.0, "hatch_scale": 1.0,
+    "water":                 {"hatch_type": "acad", "hatch_pattern": "AR-RROOF",
                               "hatch_color": "#c8c8c8"},
-    "vegetation":            {"hatch_type": "dots", "hatch_scale": 2.5,
+    "vegetation":            {"hatch_type": "acad", "hatch_pattern": "AR-SAND",
                               "hatch_color": "#c8c8c8"},
-    "bare earth / farmland": {"hatch_type": "lines", "hatch_angle_deg": 45.0, "hatch_scale": 1.2,
+    "bare earth / farmland": {"hatch_type": "acad", "hatch_pattern": "LINE45",
                               "hatch_color": "#c8c8c8"},
-    # Crosshatch is inherently the densest/darkest pattern, so give paved the
-    # lightest (near-white) color to keep it the quietest of the three.
-    "paved / hardscape":     {"hatch_type": "crosshatch", "hatch_angle_deg": 45.0, "hatch_scale": 1.2,
+    # Speckle is inherently the densest pattern, so keep paved near-white so it
+    # stays the quietest of the ground covers.
+    "paved / hardscape":     {"hatch_type": "acad", "hatch_pattern": "AR-CONC",
                               "hatch_color": "#ececec"},
 }
 _FALLBACK_HATCH_STYLE = {"hatch_type": "lines", "hatch_angle_deg": 0.0, "hatch_scale": 3.0,

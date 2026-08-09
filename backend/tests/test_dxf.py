@@ -81,3 +81,97 @@ class TestTreeBlockCoordinates:
                                   "scale": 1.4, "rotation": 0}])
         ins = list(doc.modelspace().query("INSERT"))[0]
         assert ins.dxf.xscale == ins.dxf.yscale == ins.dxf.zscale == 1.4
+
+
+def _export_with_landtype(tmp_path, label="water"):
+    """Export one building + one big land-type region styled by label."""
+    from shapely.geometry import MultiPolygon
+    from app.pipeline.landtypes import default_hatch_style
+    out = tmp_path / "out.dxf"
+    region = MultiPolygon([Polygon([(0, 0), (1000, 0), (1000, 800), (0, 800)])])
+    export_dxf(
+        out,
+        buildings=[Polygon([(480, 380), (520, 380), (520, 420), (480, 420)])],
+        roads=[],
+        tree_placements=[],
+        tree_block_curves=[_tree_block()],
+        land_types=[{"label": label, "polygons": region,
+                     "style": default_hatch_style(label)}],
+        style={},
+        scale_m_per_px=0.3,
+        origin_px=(500, 400),
+    )
+    return ezdxf.readfile(out)
+
+
+class TestAcadHatchPatterns:
+    def test_water_hatch_reproduces_reference_pattern(self, tmp_path):
+        # The written HATCH must carry the AR-RROOF definition verbatim
+        # (scale/angle identity) — this is what guarantees the exported file
+        # matches the hand-tuned reference in any viewer.
+        from app.pipeline.landtypes import ACAD_PATTERNS
+        doc = _export_with_landtype(tmp_path, "water")
+        hatches = [h for h in doc.modelspace().query("HATCH")
+                   if h.dxf.layer == "LANDTYPE_1"]
+        assert len(hatches) == 1
+        h = hatches[0]
+        assert h.dxf.pattern_name == "AR-RROOF"
+        ref = ACAD_PATTERNS["AR-RROOF"]
+        assert len(h.pattern.lines) == len(ref)
+        first, (r_angle, r_base, r_offset, r_dashes) = h.pattern.lines[0], ref[0]
+        assert abs(first.angle - r_angle) < 1e-6
+        assert abs(first.offset.x - r_offset[0]) < 1e-6
+        assert abs(first.offset.y - r_offset[1]) < 1e-6
+        assert [round(d, 6) for d in first.dash_length_items] == r_dashes
+
+    def test_all_default_styles_are_acad_patterns(self):
+        from app.pipeline.landtypes import (
+            DEFAULT_HATCH_STYLES, ACAD_PATTERNS, default_hatch_style,
+        )
+        for label, style in DEFAULT_HATCH_STYLES.items():
+            assert style["hatch_type"] == "acad"
+            assert style["hatch_pattern"] in ACAD_PATTERNS
+            assert default_hatch_style(label)["hatch_pattern"] == style["hatch_pattern"]
+
+
+class TestLayerStackingAndAnnotations:
+    def test_roofs_layer_comes_after_landtypes_in_table(self, tmp_path):
+        # Viewers that break coincident-draw ties by layer-table position need
+        # ROOFS above every LANDTYPE_* layer for outlines to keep full weight.
+        doc = _export_with_landtype(tmp_path)
+        names = [layer.dxf.name for layer in doc.layers]
+        assert names.index("ROOFS") > names.index("LANDTYPE_1")
+
+    def test_hatch_stops_short_of_building_outline(self, tmp_path):
+        # The land hatch boundary must not touch the footprint polygon: it is
+        # clipped HATCH_CLIP_MARGIN_M clear of it so the roof outline stroke
+        # is never painted over (building edge at x=480px -> -6.0 m; margin
+        # 0.4 m -> hatch hole edge at <= -6.4 m).
+        doc = _export_with_landtype(tmp_path)
+        h = [h for h in doc.modelspace().query("HATCH")
+             if h.dxf.layer == "LANDTYPE_1"][0]
+        hole_xs = []
+        for path in h.paths:
+            if hasattr(path, "vertices"):
+                xs = [v[0] for v in path.vertices]
+                if -30 < min(xs) and max(xs) < 30:   # the building-hole path
+                    hole_xs = xs
+        assert hole_xs and min(hole_xs) <= -6.39
+
+    def test_scale_bar_present_bottom_right(self, tmp_path):
+        doc = _export_with_landtype(tmp_path)
+        msp = doc.modelspace()
+        names = [layer.dxf.name for layer in doc.layers]
+        assert "SCALEBAR" in names
+        texts = [t for t in msp.query("TEXT") if t.dxf.layer == "SCALEBAR"]
+        assert texts, "scale bar labels missing"
+        # Total label carries the unit and sits at the drawing's right edge,
+        # below its bottom edge.
+        unit_labels = [t for t in texts if t.dxf.text.endswith(" m")]
+        assert len(unit_labels) == 1
+        extmin_y = -400 * 0.3  # bottom of the 800px-tall region at scale 0.3
+        assert all(t.dxf.insert.y < extmin_y for t in texts)
+
+    def test_insunits_meters(self, tmp_path):
+        doc = _export_with_landtype(tmp_path)
+        assert doc.header["$INSUNITS"] == 6  # meters — importers scale right
