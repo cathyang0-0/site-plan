@@ -67,10 +67,12 @@ class LandTypeStyle(LayerStyle):
 
 class ContourStyle(LayerStyle):
     """Topographic contours (stage pending: USGS elevation data).
-    User spec: hairline weight, light gray, bottom-most in draw order —
-    below the land hatches in the export's Z staircase."""
-    color: str = "#c8c8c8"
-    line_weight_mm: float = 0.0      # 0 = thinnest ("hairline") in DXF
+    User spec: as close to hairline as DXF allows, bottom-most in draw order —
+    below the land hatches in the export's Z staircase. True hairline is a
+    Rhino-only special value DXF can't carry, so: thinnest real DXF weight
+    (0.05 mm) compensated with a very light gray."""
+    color: str = "#dcdcdc"
+    line_weight_mm: float = 0.05
     interval_m: float = 1.0
 
 

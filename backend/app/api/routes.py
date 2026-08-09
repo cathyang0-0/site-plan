@@ -1,42 +1,68 @@
+"""
+API routes — thin HTTP layer over app.api.jobs (the job manager).
+
+The submit → poll → export shape exists because detection takes minutes:
+POST /jobs returns a ticket immediately, GET /jobs/{id} is the ticket check,
+and export re-renders the cached geometry with new styling in seconds.
+"""
+from typing import Optional
+
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
-from app.models.schemas import JobRequest, JobStatus
+
+from app.api import jobs
+from app.models.schemas import JobRequest, JobStatus, StyleConfig
+from app.pipeline.imagery import usgs_export_size_px
 
 router = APIRouter()
 
 
 @router.post("/jobs", response_model=JobStatus)
 async def create_job(request: JobRequest):
-    """
-    Submit a new site plan generation job.
-    Returns a job_id to poll for status.
-    """
-    # TODO: enqueue Celery task
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+    """Submit a site-plan generation job. Returns immediately with a job_id
+    to poll; detection runs in the background (minutes)."""
+    bb = request.bbox
+    try:  # fail fast on a bbox the imagery service can't render
+        usgs_export_size_px(bb.west, bb.south, bb.east, bb.north,
+                            request.options.scale_m_per_px)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    job = jobs.create_job(request)
+    return job.to_status()
 
 
 @router.get("/jobs/{job_id}", response_model=JobStatus)
 async def get_job_status(job_id: str):
-    """Poll job status. When complete, geometry GeoJSON is included."""
-    # TODO: query Celery result
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+    """Poll job status; `progress` reports per-stage state while running."""
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"no such job: {job_id}")
+    return job.to_status()
 
 
 @router.post("/jobs/{job_id}/export")
-async def export_job(job_id: str):
-    """
-    Trigger file export with current style config.
-    Returns a .zip download with DXF (and optionally 3DM).
-    """
-    # TODO: run export pipeline and return file
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+async def export_job(job_id: str, style: Optional[StyleConfig] = None):
+    """Download the DXF. With a style body, re-renders the cached geometry
+    using it (seconds — no re-detection); without, returns the default render."""
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"no such job: {job_id}")
+    if job.status != "complete":
+        raise HTTPException(status_code=409,
+                            detail=f"job is {job.status}, not complete")
+    if style is not None:
+        path = jobs.export_dxf_for(job, style)
+    else:
+        path = job.dxf_path
+    if path is None or not path.exists():
+        raise HTTPException(status_code=500, detail="export file missing")
+    return FileResponse(path, media_type="application/dxf",
+                        filename="site-plan.dxf")
 
 
 @router.post("/blocks/parse")
 async def parse_block(file: UploadFile = File(...)):
-    """
-    Parse an uploaded DXF file containing exploded curves.
-    Returns the curve geometry as GeoJSON for preview.
-    """
-    # TODO: parse with ezdxf, return curves
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+    """Parse an uploaded DXF of custom tree symbols. Not implemented yet —
+    the built-in tree block is used for all placements."""
+    raise HTTPException(status_code=501,
+                        detail="custom tree blocks not implemented yet")

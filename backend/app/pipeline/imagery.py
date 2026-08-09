@@ -1,6 +1,11 @@
 """
-Fetch and stitch Mapbox Satellite tiles for a given bounding box.
-Returns a single PIL Image and the pixel-to-meter scale.
+Aerial imagery for a lon/lat bounding box.
+
+Two sources:
+- fetch_aerial_usgs — USGS National Map (public domain, keyless, US only).
+  The default: it's what the test imagery has always used, and no token is
+  configured in this environment.
+- fetch_aerial_image — Mapbox Satellite tiles (global, needs MAPBOX_TOKEN).
 """
 import os
 import math
@@ -11,6 +16,60 @@ import io
 MAPBOX_TOKEN = os.environ.get("MAPBOX_TOKEN", "")
 TILE_SIZE = 512
 ZOOM = 19
+
+USGS_EXPORT_URL = ("https://basemap.nationalmap.gov/arcgis/rest/services/"
+                   "USGSImageryOnly/MapServer/export")
+USGS_MAX_EXPORT_PX = 4096  # service-side request limit
+
+
+def bbox_size_m(west: float, south: float, east: float, north: float) -> tuple[float, float]:
+    """Approximate width/height of a lon/lat bbox in meters (site scale)."""
+    lat_mid = math.radians((south + north) / 2)
+    width_m = (east - west) * 111_320 * math.cos(lat_mid)
+    height_m = (north - south) * 111_320
+    return width_m, height_m
+
+
+def usgs_export_size_px(west: float, south: float, east: float, north: float,
+                        m_per_px: float) -> tuple[int, int]:
+    """Pixel dimensions the USGS export needs for this bbox at this scale.
+    Raises ValueError past the service's request limit (pure function so the
+    API can validate a request before starting a job)."""
+    width_m, height_m = bbox_size_m(west, south, east, north)
+    px_w, px_h = round(width_m / m_per_px), round(height_m / m_per_px)
+    if max(px_w, px_h) > USGS_MAX_EXPORT_PX:
+        raise ValueError(
+            f"bbox needs {px_w}x{px_h}px at {m_per_px} m/px which exceeds the "
+            f"USGS {USGS_MAX_EXPORT_PX}px export limit; use a smaller bbox or "
+            f"coarser scale")
+    if min(px_w, px_h) < 1:
+        raise ValueError("bbox is empty or degenerate")
+    return px_w, px_h
+
+
+def fetch_aerial_usgs(west: float, south: float, east: float, north: float,
+                      m_per_px: float = 0.3):
+    """
+    Fetch one aerial image spanning exactly the bbox from the USGS National
+    Map export endpoint (public domain, no API key; US coverage only).
+
+    Returns (image, scale_m_per_px) — the actual scale of the returned image,
+    computed from the bbox width / pixel width.
+    """
+    px_w, px_h = usgs_export_size_px(west, south, east, north, m_per_px)
+    width_m, _ = bbox_size_m(west, south, east, north)
+    params = {
+        "bbox": f"{west},{south},{east},{north}",
+        "bboxSR": "4326",
+        "imageSR": "3857",
+        "size": f"{px_w},{px_h}",
+        "format": "png",
+        "f": "image",
+    }
+    resp = httpx.get(USGS_EXPORT_URL, params=params, timeout=120)
+    resp.raise_for_status()
+    image = Image.open(io.BytesIO(resp.content)).convert("RGB")
+    return image, width_m / image.width
 
 
 def lon_lat_to_tile(lon: float, lat: float, zoom: int):

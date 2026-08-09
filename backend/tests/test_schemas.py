@@ -86,10 +86,11 @@ class TestLandTypeStyle:
 
 class TestContourStyle:
     def test_user_spec_defaults(self):
-        # Hairline, light gray; drawn bottom-most (below hatches) in export.
+        # Near-hairline (0.05 = thinnest real DXF weight; true hairline is
+        # Rhino-only), very light gray; drawn bottom-most (below hatches).
         c = ContourStyle()
-        assert c.line_weight_mm == 0.0
-        assert c.color == "#c8c8c8"
+        assert c.line_weight_mm == 0.05
+        assert c.color == "#dcdcdc"
         assert c.interval_m == 1.0
 
 
