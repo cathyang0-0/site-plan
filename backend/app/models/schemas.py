@@ -1,5 +1,16 @@
+"""
+API contract (Pydantic models) — the "order form" between any client (web app,
+Rhino command) and the pipeline service.
+
+Modernized 2026-08 to describe the pipeline that actually exists (poc.py):
+Overture buildings/roads/water, k-means or SegFormer land cover, DeepForest
+trees, the hatch-reference export styling. Fields for never-built features
+(ridge lines, site boundary, the old lines/dots/crosshatch hatch model) were
+removed — the contract must not promise what the kitchen can't cook. Contours
+are included ahead of the stage being built (USGS elevation; user-requested).
+"""
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Literal
 
 
 class BoundingBox(BaseModel):
@@ -10,63 +21,82 @@ class BoundingBox(BaseModel):
     north: float
 
 
+class DetectOptions(BaseModel):
+    """Knobs for the detection stages — mirrors poc.py's real flags."""
+    scale_m_per_px: float = 0.3          # imagery resolution to fetch/run at
+    # Open-data sources (Overture). Primary when georeferenced; CV falls back.
+    overture_buildings: bool = True
+    overture_roads: bool = True
+    overture_water: bool = True
+    # Land-cover engine. k-means is the default; the SegFormer engine is
+    # evaluation-only until the OpenEarthMap license question is resolved, so
+    # clients must opt in explicitly (same posture as poc.py).
+    land_types_engine: Literal["kmeans", "segmodel"] = "kmeans"
+    paved_min_conf: Optional[float] = None   # None = engine default
+    # Trees (DeepForest).
+    crown_size_scale: float = 1.0
+    size_variance: Optional[float] = None    # None = pipeline default
+    stand_fill: bool = True
+
+
 class TreeBlockCalibration(BaseModel):
-    block_index: int          # 0, 1, or 2
+    block_index: int             # 0, 1, or 2
     reference_diameter_m: float  # real-world canopy diameter this block represents
 
 
 class LayerStyle(BaseModel):
     visible: bool = True
-    color: str = "#000000"      # hex
+    color: str = "#000000"       # hex
     line_weight_mm: float = 0.25
 
 
-class RoofStyle(LayerStyle):
-    hatch: bool = False         # white fill is always on; this adds an extra hatch
-    hatch_color: str = "#cccccc"
-    hatch_angle_deg: float = 45.0
-    hatch_spacing_mm: float = 3.0
-
-
 class LandTypeStyle(LayerStyle):
-    hatch_type: str = "lines"   # "none" | "lines" | "crosshatch" | "dots" | "solid"
-    hatch_color: str = "#cccccc"
-    hatch_angle_deg: float = 45.0
-    hatch_spacing_mm: float = 3.0
-    outline_only: bool = False  # fallback: skip hatch entity, draw boundary only
+    """Style override for one land-cover layer.
+
+    `pattern` is an AutoCAD hatch pattern name (e.g. "AR-SAND"). The default
+    styling — the user's hatch-reference patterns per label — lives in the
+    export pipeline (landtypes.ACAD_PATTERNS); an empty StyleConfig.land_types
+    means "use those defaults". Overrides here are per-layer, in label order.
+    """
+    label: Optional[str] = None      # "water" | "vegetation" | ... (None = positional)
+    pattern: Optional[str] = None    # None = pipeline default for this label
+    pattern_scale: float = 1.0
+    pattern_angle_deg: float = 0.0
+    outline_only: bool = False       # skip hatch entity, draw boundary only
+
+
+class ContourStyle(LayerStyle):
+    """Topographic contours (stage pending: USGS elevation data).
+    User spec: hairline weight, light gray, bottom-most in draw order —
+    below the land hatches in the export's Z staircase."""
+    color: str = "#c8c8c8"
+    line_weight_mm: float = 0.0      # 0 = thinnest ("hairline") in DXF
+    interval_m: float = 1.0
 
 
 class StyleConfig(BaseModel):
-    site_boundary: LayerStyle = LayerStyle(color="#000000", line_weight_mm=0.35)
-    roofs: RoofStyle = RoofStyle(color="#1a1a1a", line_weight_mm=0.25)
-    ridge_lines: LayerStyle = LayerStyle(color="#444444", line_weight_mm=0.10)
-    ridge_lines_uncertain: LayerStyle = LayerStyle(color="#aaaaaa", line_weight_mm=0.05)
+    # Defaults mirror poc.py's architectural hierarchy: roofs heaviest,
+    # roads secondary, trees/land texture lightest.
+    roofs: LayerStyle = LayerStyle(color="#000000", line_weight_mm=0.40)
     roads: LayerStyle = LayerStyle(color="#333333", line_weight_mm=0.18)
     trees: LayerStyle = LayerStyle(color="#555555", line_weight_mm=0.10)
-    contours: LayerStyle = LayerStyle(color="#999999", line_weight_mm=0.05)
-    land_types: List[LandTypeStyle] = [
-        # defaults match detected cluster order: water, vegetation, bare earth, paved
-        LandTypeStyle(color="#aaaaaa", line_weight_mm=0.05, hatch_type="lines",
-                      hatch_color="#888888", hatch_angle_deg=0.0,  hatch_spacing_mm=2.0),
-        LandTypeStyle(color="#aaaaaa", line_weight_mm=0.05, hatch_type="dots",
-                      hatch_color="#777777", hatch_angle_deg=0.0,  hatch_spacing_mm=1.5),
-        LandTypeStyle(color="#aaaaaa", line_weight_mm=0.05, hatch_type="lines",
-                      hatch_color="#888888", hatch_angle_deg=45.0, hatch_spacing_mm=3.0),
-        LandTypeStyle(color="#aaaaaa", line_weight_mm=0.05, hatch_type="crosshatch",
-                      hatch_color="#666666", hatch_angle_deg=45.0, hatch_spacing_mm=2.5),
-    ]
+    # Empty list = the pipeline's hatch-reference defaults (one entry per
+    # detected label, in label order, when overriding).
+    land_types: List[LandTypeStyle] = []
+    contours: ContourStyle = ContourStyle()
 
 
 class JobRequest(BaseModel):
     bbox: BoundingBox
     layers: List[str] = ["roofs", "roads", "trees", "land_types"]
+    options: DetectOptions = DetectOptions()
     style: StyleConfig = StyleConfig()
     block_calibrations: List[TreeBlockCalibration] = []
 
 
 class JobStatus(BaseModel):
     job_id: str
-    status: str             # "queued" | "running" | "complete" | "failed"
-    progress: Optional[dict] = None   # per-module status
+    status: Literal["queued", "running", "complete", "failed"]
+    progress: Optional[dict] = None   # per-stage status while running
     geometry: Optional[dict] = None   # GeoJSON FeatureCollection when complete
     error: Optional[str] = None
