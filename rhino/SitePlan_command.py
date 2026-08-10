@@ -44,18 +44,44 @@ def _ask_bbox():
     return {"west": w, "south": s, "east": e, "north": n}
 
 
+def _parse_interval(raw):
+    """'5ft' / '5 ft' → meters; a bare number is meters already."""
+    raw = raw.strip().lower()
+    feet = raw.endswith("ft")
+    if feet:
+        raw = raw[:-2].strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    if value <= 0:
+        return None
+    return value * 0.3048 if feet else value
+
+
 def _ask_options():
-    """A few yes/no choices; defaults match the user's usual full plan."""
+    """A few choices; defaults match the user's usual full plan."""
     trees = rs.GetString("Detect trees? (the slow stage, ~5 min)", "Yes",
                          ["Yes", "No"])
     if trees is None:
-        return None, None
-    layers = ["roofs", "roads", "land_types"] + (["trees"] if trees == "Yes" else [])
+        return None, None, None
+    layers = ["roofs", "roads", "land_types", "contours"] + \
+             (["trees"] if trees == "Yes" else [])
     engine = rs.GetString("Land-cover engine", "kmeans", ["kmeans", "segmodel"])
     if engine is None:
-        return None, None
+        return None, None, None
+    interval_raw = rs.GetString('Contour interval ("5ft", "10ft", or meters; '
+                                '0 for no contours)', "5ft")
+    if interval_raw is None:
+        return None, None, None
+    interval_m = _parse_interval(interval_raw)
+    style = None
+    if interval_m is None:          # 0 / unparsable → skip contours
+        layers.remove("contours")
+    else:
+        style = {"contours": {"interval_m": interval_m}}
     options = {"land_types_engine": engine, "crown_size_scale": 1.5}
-    return layers, options
+    return layers, options, style
 
 
 def _progress(status):
@@ -74,13 +100,13 @@ def run():
     bbox = _ask_bbox()
     if bbox is None:
         return
-    layers, options = _ask_options()
+    layers, options, style = _ask_options()
     if layers is None:
         return
 
     out = os.path.join(tempfile.mkdtemp(prefix="siteplan_"), "site-plan.dxf")
     try:
-        job_id = spc.submit_job(bbox, layers=layers, options=options)
+        job_id = spc.submit_job(bbox, layers=layers, options=options, style=style)
         status = spc.poll_job(job_id, on_progress=_progress)
         path = spc.export_dxf(job_id, out)
     except spc.SitePlanError as exc:

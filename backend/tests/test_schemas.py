@@ -91,7 +91,7 @@ class TestContourStyle:
         c = ContourStyle()
         assert c.line_weight_mm == 0.05
         assert c.color == "#dcdcdc"
-        assert c.interval_m == 1.0
+        assert c.interval_m == 1.5  # ~5 ft — user: 1 m reads too dense
 
 
 class TestStyleConfig:

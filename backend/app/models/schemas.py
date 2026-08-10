@@ -73,7 +73,9 @@ class ContourStyle(LayerStyle):
     (0.05 mm) compensated with a very light gray."""
     color: str = "#dcdcdc"
     line_weight_mm: float = 0.05
-    interval_m: float = 1.0
+    # ~5 ft — the user's call: 1 m reads too dense at site scale. Fully
+    # client-selectable (the Rhino command prompts, accepting "5ft" or meters).
+    interval_m: float = 1.5
 
 
 class StyleConfig(BaseModel):
@@ -90,7 +92,7 @@ class StyleConfig(BaseModel):
 
 class JobRequest(BaseModel):
     bbox: BoundingBox
-    layers: List[str] = ["roofs", "roads", "trees", "land_types"]
+    layers: List[str] = ["roofs", "roads", "trees", "land_types", "contours"]
     options: DetectOptions = DetectOptions()
     style: StyleConfig = StyleConfig()
     block_calibrations: List[TreeBlockCalibration] = []

@@ -166,6 +166,17 @@ def _run_pipeline(job: Job) -> None:
     else:
         stage("water", "skipped")
 
+    # --- Contours (USGS elevation; interval from the style config) ---
+    contours = []
+    if "contours" in layers and req.style.contours.visible:
+        def _contours():
+            from app.pipeline.contours import build_contours
+            return build_contours(bb.west, bb.south, bb.east, bb.north,
+                                  req.style.contours.interval_m, img_w, img_h)
+        contours = _overture_stage(job, "contours", [], _contours)
+    else:
+        stage("contours", "skipped")
+
     # --- Tree detection (raw) — the slow stage, after all network fetches ---
     if "trees" in layers:
         stage("trees", "running")
@@ -237,7 +248,7 @@ def _run_pipeline(job: Job) -> None:
         "buildings": buildings, "roads": roads,
         "tree_placements": tree_placements,
         "tree_blocks": [poc.default_tree_block()],
-        "land_types": land_types, "scale": scale,
+        "land_types": land_types, "contours": contours, "scale": scale,
         "origin_px": (img_w // 2, img_h // 2),
         "attribution": "  ·  ".join(attributions) if attributions else None,
     }
@@ -261,6 +272,8 @@ def export_dxf_for(job: Job, style: Optional[StyleConfig]) -> Path:
         "land_types": [{"color": lt.color, "line_weight_mm": lt.line_weight_mm}
                        for lt in sc.land_types] or
                       [{"color": "#aaaaaa", "line_weight_mm": 0.05}],
+        "contours": {"color": sc.contours.color,
+                     "line_weight_mm": sc.contours.line_weight_mm},
     }
     out = job.dir / "plan.dxf"
     export_dxf(
@@ -270,6 +283,7 @@ def export_dxf_for(job: Job, style: Optional[StyleConfig]) -> Path:
         tree_placements=g["tree_placements"] if sc.trees.visible else [],
         tree_block_curves=g["tree_blocks"],
         land_types=g["land_types"],
+        contours=(g.get("contours") or None) if sc.contours.visible else None,
         style=style_dict,
         scale_m_per_px=g["scale"],
         origin_px=g["origin_px"],

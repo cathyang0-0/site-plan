@@ -50,6 +50,9 @@ HATCH_RGB = (200, 200, 200)   # light gray
 # depth are invisible in plan and boundaries stay perfectly aligned in XY.
 LAND_HATCH_Z = -0.10
 ROOF_FILL_Z = -0.05
+# Contours sit at the very bottom of the staircase — under the land hatches —
+# per the user's spec (near-hairline light gray, bottom-most draw order).
+CONTOUR_Z = -0.15
 
 # Scale bar: target fraction of the site width; snapped to a nice round length.
 SCALE_BAR_FRACTION = 0.15
@@ -88,6 +91,7 @@ def export_dxf(
     attribution: str | None = None,  # data-license credit (e.g. ODbL requires
                                      # it for Overture footprints); drawn as a
                                      # small gray note below the site
+    contours: list[dict] | None = None,  # [{"points": [(x,y) px], "level": m}]
 ):
     """
     Assemble all geometry into a layered DXF R2018 file.
@@ -215,6 +219,23 @@ def export_dxf(
     landtype_clip = unary_union(
         [g for g in (buildings_union, road_network) if g is not None]
     ) if (buildings_union is not None or road_network is not None) else None
+
+    # --- Contours (the very bottom: first layer in the table, lowest Z) ---
+    if contours:
+        c_style = style.get("contours", {})
+        _add_layer(doc, "CONTOURS",
+                   c_style.get("color", "#dcdcdc"),
+                   c_style.get("line_weight_mm", 0.05))
+        for c in contours:
+            pts = [px_to_m(p) for p in c["points"]]
+            if len(pts) < 2:
+                continue
+            msp.add_lwpolyline(pts, dxfattribs={
+                "layer": "CONTOURS",
+                # Bottom of the Z staircase: under land hatches, so every
+                # depth-tested viewer draws hatches and linework over them.
+                "elevation": CONTOUR_Z,
+            })
 
     # --- Land type hatches (drawn first — bottommost), one layer per type ---
     for i, lt in enumerate(land_types):
