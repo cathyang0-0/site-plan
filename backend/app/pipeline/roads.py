@@ -62,7 +62,13 @@ def fetch_road_network(west: float, south: float, east: float, north: float) -> 
     (rail and other subtypes dropped). Requires network access; raises
     TimeoutError past OVERTURE_TIMEOUT_S.
     """
-    from app.pipeline.footprints import fetch_with_timeout, OVERTURE_TIMEOUT_S
+    from app.pipeline.footprints import fetch_with_retry
+    from app.pipeline import overture_cache
+
+    bbox = (west, south, east, north)
+    cached = overture_cache.get("segment", bbox)
+    if cached is not None:
+        return cached
 
     def _fetch():
         from overturemaps import core
@@ -86,7 +92,9 @@ def fetch_road_network(west: float, south: float, east: float, north: float) -> 
                         roads.append({"line": part, "class": cls})
         return roads
 
-    return fetch_with_timeout(_fetch, OVERTURE_TIMEOUT_S, "road network fetch")
+    roads = fetch_with_retry(_fetch, "road network fetch")
+    overture_cache.put("segment", bbox, roads)
+    return roads
 
 
 def roads_to_pixels(

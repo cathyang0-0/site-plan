@@ -65,3 +65,4 @@ logs/
 
 # PyTorch Lightning run artifacts (created by deepforest inference)
 lightning_logs/
+backend/.overture_cache/

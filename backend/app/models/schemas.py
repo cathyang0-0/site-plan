@@ -102,3 +102,6 @@ class JobStatus(BaseModel):
     progress: Optional[dict] = None   # per-stage status while running
     geometry: Optional[dict] = None   # GeoJSON FeatureCollection when complete
     error: Optional[str] = None
+    # Non-fatal stage failures (e.g. an Overture layer timed out and the plan
+    # was generated without it). Complete-with-warnings beats failed.
+    warnings: Optional[List[str]] = None

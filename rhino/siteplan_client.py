@@ -114,6 +114,10 @@ if __name__ == "__main__":
         running = [k for k, v in stages.items() if v == "running"]
         print(f"  {status['status']}: done={done} running={running}")
 
-    path = generate({"west": w, "south": s, "east": e, "north": n},
-                    sys.argv[5], layers=layers, on_progress=_print_progress)
+    bbox = {"west": w, "south": s, "east": e, "north": n}
+    job_id = submit_job(bbox, layers=layers)
+    final = poll_job(job_id, on_progress=_print_progress)
+    path = export_dxf(job_id, sys.argv[5])
+    for warning in final.get("warnings") or []:
+        print(f"WARNING: {warning}")
     print(f"saved {path}")

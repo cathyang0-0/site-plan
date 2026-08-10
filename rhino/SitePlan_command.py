@@ -80,11 +80,21 @@ def run():
 
     out = os.path.join(tempfile.mkdtemp(prefix="siteplan_"), "site-plan.dxf")
     try:
-        path = spc.generate(bbox, out, layers=layers, options=options,
-                            on_progress=_progress)
+        job_id = spc.submit_job(bbox, layers=layers, options=options)
+        status = spc.poll_job(job_id, on_progress=_progress)
+        path = spc.export_dxf(job_id, out)
     except spc.SitePlanError as exc:
         rs.MessageBox(str(exc), title="SitePlan")
         return
+
+    # Non-fatal stage failures (e.g. an Overture layer timed out): the plan
+    # imported fine but is missing that layer — tell the user, don't hide it.
+    warnings = status.get("warnings") or []
+    if warnings:
+        rs.MessageBox("Plan generated WITH WARNINGS — some layers are "
+                      "missing:\n\n" + "\n".join(warnings) +
+                      "\n\nRe-run later to get them (results are cached once "
+                      "a fetch succeeds).", title="SitePlan")
 
     # Import the DXF into the active document. The file declares meters
     # ($INSUNITS=6); Rhino scales it into the document's units automatically.

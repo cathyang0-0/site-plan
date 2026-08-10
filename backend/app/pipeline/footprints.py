@@ -52,6 +52,29 @@ def fetch_with_timeout(fn, timeout_s: float, what: str):
     return box["result"]
 
 
+# Overture's slow spells recover on a FRESH attempt more often than on a
+# longer wait (observed 2026-08: attempt 1 dead at 420 s, attempt 2 fine in
+# seconds) — so retry timed-out fetches rather than raising the timeout.
+OVERTURE_ATTEMPTS = 3
+
+
+def fetch_with_retry(fn, what: str, attempts: int = OVERTURE_ATTEMPTS,
+                     timeout_s: float = OVERTURE_TIMEOUT_S):
+    """fetch_with_timeout, retried on TimeoutError with a fresh connection.
+    Non-timeout errors raise immediately (a bad bbox won't get better by
+    looping). Each abandoned attempt leaves its daemon thread behind — see
+    fetch_with_timeout; acceptable for a handful of retries."""
+    last = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return fetch_with_timeout(fn, timeout_s, what)
+        except TimeoutError as exc:
+            last = exc
+            if attempt < attempts:
+                print(f"  {what}: attempt {attempt}/{attempts} timed out; retrying...")
+    raise last
+
+
 def fetch_building_footprints(
     west: float, south: float, east: float, north: float
 ) -> list[Polygon]:
@@ -60,9 +83,16 @@ def fetch_building_footprints(
 
     Returns polygons in lon/lat (WGS84) coordinates; convert with
     footprints_to_pixels for pipeline use. Multipolygons are split into
-    their parts. Requires network access; raises TimeoutError past
-    OVERTURE_TIMEOUT_S.
+    their parts. Successful results are disk-cached per bbox (see
+    overture_cache) so repeat runs skip the network entirely; a miss
+    retries timed-out fetches (raises TimeoutError only after all attempts).
     """
+    from app.pipeline import overture_cache
+    bbox = (west, south, east, north)
+    cached = overture_cache.get("building", bbox)
+    if cached is not None:
+        return cached
+
     def _fetch():
         from overturemaps import core
 
@@ -81,7 +111,9 @@ def fetch_building_footprints(
                     polygons.extend(geom.geoms)
         return polygons
 
-    return fetch_with_timeout(_fetch, OVERTURE_TIMEOUT_S, "building footprints fetch")
+    polygons = fetch_with_retry(_fetch, "building footprints fetch")
+    overture_cache.put("building", bbox, polygons)
+    return polygons
 
 
 def footprints_to_pixels(

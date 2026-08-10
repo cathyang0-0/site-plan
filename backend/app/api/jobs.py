@@ -38,6 +38,7 @@ class Job:
         self.status = "queued"          # queued | running | complete | failed
         self.progress: dict = {}        # stage -> "running" | "done" | "skipped"
         self.error: Optional[str] = None
+        self.warnings: list[str] = []
         self.dir = Path(tempfile.mkdtemp(prefix=f"siteplan_{self.id}_"))
         self.dxf_path: Optional[Path] = None
         # Detection results cached for restyle-without-redetect (see /export).
@@ -45,7 +46,8 @@ class Job:
 
     def to_status(self) -> JobStatus:
         return JobStatus(job_id=self.id, status=self.status,
-                         progress=self.progress or None, error=self.error)
+                         progress=self.progress or None, error=self.error,
+                         warnings=self.warnings or None)
 
 
 def create_job(request: JobRequest) -> Job:
@@ -83,6 +85,23 @@ def _poc():
     return poc
 
 
+def _overture_stage(job: Job, name: str, default, fn):
+    """Run an optional open-data stage; on failure, warn and continue with
+    `default`. Rationale: Overture has real multi-hour slow spells, and one
+    dead layer must not throw away minutes of finished detection — a partial
+    plan with a visible warning beats a failed job."""
+    job.progress[name] = "running"
+    try:
+        result = fn()
+        job.progress[name] = "done"
+        return result
+    except Exception as exc:
+        job.progress[name] = "failed"
+        job.warnings.append(
+            f"{name}: {type(exc).__name__}: {exc} — plan generated without this layer")
+        return default
+
+
 def _run_pipeline(job: Job) -> None:
     req = job.request
     bb = req.bbox
@@ -104,27 +123,50 @@ def _run_pipeline(job: Job) -> None:
     buildings, roads, water_polys, land_types, tree_placements = [], [], [], [], []
     detections = []
 
+    # All Overture stages run BEFORE the ~5 min tree detection so network
+    # trouble surfaces in the first minutes, and each degrades to "warn +
+    # continue" instead of failing the job (see _overture_stage).
+
     # --- Overture roads ---
     if "roads" in layers and opts.overture_roads:
-        stage("roads", "running")
-        from app.pipeline.roads import build_roads
-        roads = build_roads(image, bb.west, bb.south, bb.east, bb.north, scale)
-        stage("roads", "done")
+        def _roads():
+            from app.pipeline.roads import build_roads
+            return build_roads(image, bb.west, bb.south, bb.east, bb.north, scale)
+        roads = _overture_stage(job, "roads", [], _roads)
     else:
         stage("roads", "skipped")
 
     # --- Overture buildings ---
     if "roofs" in layers and opts.overture_buildings:
-        stage("buildings", "running")
-        from app.pipeline.footprints import fetch_building_footprints, footprints_to_pixels
-        geo = fetch_building_footprints(bb.west, bb.south, bb.east, bb.north)
-        buildings = footprints_to_pixels(geo, bb.west, bb.south, bb.east, bb.north,
-                                         img_w, img_h)
-        stage("buildings", "done")
+        def _buildings():
+            from app.pipeline.footprints import (
+                fetch_building_footprints, footprints_to_pixels)
+            geo = fetch_building_footprints(bb.west, bb.south, bb.east, bb.north)
+            return footprints_to_pixels(geo, bb.west, bb.south, bb.east, bb.north,
+                                        img_w, img_h)
+        buildings = _overture_stage(job, "buildings", [], _buildings)
     else:
         stage("buildings", "skipped")
 
-    # --- Tree detection (raw) ---
+    # --- Overture water (feeds both the land layer and tree suppression) ---
+    if opts.overture_water and ("land_types" in layers or "trees" in layers):
+        def _water():
+            from shapely.ops import unary_union
+            from app.pipeline.water import fetch_water_footprints
+            from app.pipeline.footprints import footprints_to_pixels
+            geo = fetch_water_footprints(bb.west, bb.south, bb.east, bb.north)
+            water_px = footprints_to_pixels(geo, bb.west, bb.south, bb.east,
+                                            bb.north, img_w, img_h)
+            if not water_px:
+                return []
+            merged = unary_union(water_px)
+            return (list(merged.geoms)
+                    if merged.geom_type == "MultiPolygon" else [merged])
+        water_polys = _overture_stage(job, "water", [], _water)
+    else:
+        stage("water", "skipped")
+
+    # --- Tree detection (raw) — the slow stage, after all network fetches ---
     if "trees" in layers:
         stage("trees", "running")
         detections = poc.real_tree_detections(
@@ -134,23 +176,6 @@ def _run_pipeline(job: Job) -> None:
             **({"size_variance": opts.size_variance}
                if opts.size_variance is not None else {}),
         )
-
-    # --- Overture water (feeds both the land layer and tree suppression) ---
-    if opts.overture_water and ("land_types" in layers or "trees" in layers):
-        stage("water", "running")
-        from shapely.ops import unary_union
-        from app.pipeline.water import fetch_water_footprints
-        from app.pipeline.footprints import footprints_to_pixels
-        geo = fetch_water_footprints(bb.west, bb.south, bb.east, bb.north)
-        water_px = footprints_to_pixels(geo, bb.west, bb.south, bb.east, bb.north,
-                                        img_w, img_h)
-        if water_px:
-            merged = unary_union(water_px)
-            water_polys = (list(merged.geoms)
-                           if merged.geom_type == "MultiPolygon" else [merged])
-        stage("water", "done")
-    else:
-        stage("water", "skipped")
 
     # --- Land types (before the tree filter: water suppresses lake trees) ---
     if "land_types" in layers:
