@@ -79,6 +79,11 @@ class ContourStyle(LayerStyle):
 
 
 class StyleConfig(BaseModel):
+    # Output drawing unit. The DXF is written NATIVELY in this unit (geometry,
+    # hatch pattern spacing, text) so the importing app never unit-converts —
+    # conversion is where hatch spacings get lost (Rhino scales geometry but
+    # not pattern definitions). The Rhino client sends its document's unit.
+    units: Literal["m", "mm", "cm", "ft", "in"] = "m"
     # Defaults mirror poc.py's architectural hierarchy: roofs heaviest,
     # roads secondary, trees/land texture lightest.
     roofs: LayerStyle = LayerStyle(color="#000000", line_weight_mm=0.40)

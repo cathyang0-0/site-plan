@@ -47,12 +47,21 @@ def fetch_elevation_usgs(west: float, south: float, east: float, north: float,
         "pixelType": "F32",
         "f": "image",
     }
-    resp = httpx.get(ELEVATION_URL, params=params, timeout=120)
-    resp.raise_for_status()
-    dem = np.asarray(Image.open(io.BytesIO(resp.content)), dtype=np.float32)
-    if dem.ndim != 2:
-        dem = dem[..., 0]
-    return dem
+    # The export endpoint occasionally returns a truncated TIFF mid-transfer
+    # (seen live: "image file is truncated (194 bytes not processed)") — a
+    # fresh request succeeds, so retry the fetch+decode as one unit.
+    last_exc = None
+    for attempt in range(3):
+        try:
+            resp = httpx.get(ELEVATION_URL, params=params, timeout=120)
+            resp.raise_for_status()
+            dem = np.asarray(Image.open(io.BytesIO(resp.content)), dtype=np.float32)
+            if dem.ndim != 2:
+                dem = dem[..., 0]
+            return dem
+        except Exception as exc:
+            last_exc = exc
+    raise last_exc
 
 
 def contour_levels(zmin: float, zmax: float, interval_m: float) -> list[float]:

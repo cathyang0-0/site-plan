@@ -54,6 +54,16 @@ ROOF_FILL_Z = -0.05
 # per the user's spec (near-hairline light gray, bottom-most draw order).
 CONTOUR_Z = -0.15
 
+# Unit-neutral export: modelspace can be written natively in the CLIENT
+# DOCUMENT's unit so importers never have to unit-convert (conversion is where
+# hatch pattern spacings get lost — Rhino scales geometry but not pattern
+# definitions, turning a 0.3 m spacing into 0.3 mm of invisible dust). All
+# internal constants are authored in meters and multiplied by UNIT_FACTOR at
+# draw time; DXF lineweights are the exception (always defined in mm).
+UNIT_FACTOR = {"m": 1.0, "mm": 1000.0, "cm": 100.0,
+               "ft": 1 / 0.3048, "in": 1 / 0.0254}
+UNIT_INSUNITS = {"in": 1, "ft": 2, "mm": 4, "cm": 5, "m": 6}
+
 # Scale bar: target fraction of the site width; snapped to a nice round length.
 SCALE_BAR_FRACTION = 0.15
 
@@ -92,6 +102,7 @@ def export_dxf(
                                      # it for Overture footprints); drawn as a
                                      # small gray note below the site
     contours: list[dict] | None = None,  # [{"points": [(x,y) px], "level": m}]
+    units: str = "m",                # output drawing unit (see UNIT_FACTOR)
 ):
     """
     Assemble all geometry into a layered DXF R2018 file.
@@ -107,13 +118,20 @@ def export_dxf(
         scale_m_per_px:     conversion factor
         origin_px:          pixel coordinate that maps to (0, 0) in output
     """
+    if units not in UNIT_FACTOR:
+        raise ValueError(f"unknown units {units!r}; expected one of {sorted(UNIT_FACTOR)}")
+    u = UNIT_FACTOR[units]           # meters -> output-unit multiplier
+    upx = scale_m_per_px * u         # output units per pixel
+    # NOTE: pixel-domain math (fillet radius, road widths) keeps using
+    # scale_m_per_px — only the px->drawing conversions below use upx.
+
     doc = ezdxf.new("R2018", setup=True)
     msp = doc.modelspace()
 
     def px_to_m(px_coord):
-        """Convert pixel (x, y) to local meter coordinates."""
-        x = (px_coord[0] - origin_px[0]) * scale_m_per_px
-        y = -(px_coord[1] - origin_px[1]) * scale_m_per_px  # flip Y axis
+        """Convert pixel (x, y) to local drawing-unit coordinates."""
+        x = (px_coord[0] - origin_px[0]) * upx
+        y = -(px_coord[1] - origin_px[1]) * upx  # flip Y axis
         return (x, y)
 
     def poly_pts(polygon):
@@ -140,7 +158,7 @@ def export_dxf(
         bug.) The Y sign is flipped to match px_to_m's axis convention so
         the symbol isn't mirrored relative to world geometry.
         """
-        return (px_coord[0] * scale_m_per_px, -px_coord[1] * scale_m_per_px)
+        return (px_coord[0] * upx, -px_coord[1] * upx)
 
     # --- Define tree blocks ---
     # Block names carry a per-export random token. Rhino (and some other
@@ -234,7 +252,7 @@ def export_dxf(
                 "layer": "CONTOURS",
                 # Bottom of the Z staircase: under land hatches, so every
                 # depth-tested viewer draws hatches and linework over them.
-                "elevation": CONTOUR_Z,
+                "elevation": CONTOUR_Z * u,
             })
 
     # --- Land type hatches (drawn first — bottommost), one layer per type ---
@@ -252,7 +270,7 @@ def export_dxf(
         if lt_style.get("outline_only", False):
             _draw_multipolygon_outlines(msp, polygons, poly_rings, layer_name)
         else:
-            _draw_multipolygon_hatches(msp, polygons, poly_rings, layer_name, lt_style)
+            _draw_multipolygon_hatches(msp, polygons, poly_rings, layer_name, lt_style, u=u)
 
     # Upper layers registered only now, so they land ABOVE every LANDTYPE_*
     # layer in the table (see the layer-order comment above).
@@ -317,7 +335,7 @@ def export_dxf(
         hatch = msp.add_hatch(color=255, dxfattribs={
             "layer": "ROOFS_FILL",  # ACI 255 = true white, never swaps
             # Above the land hatches but still below all linework (Z staircase).
-            "elevation": (0, 0, ROOF_FILL_Z),
+            "elevation": (0, 0, ROOF_FILL_Z * u),
         })
         hatch.paths.add_polyline_path(pts, is_closed=True)
         hatch.set_pattern_fill("SOLID")
@@ -336,16 +354,16 @@ def export_dxf(
         _add_layer(doc, "NOTES", "#999999", 0.05)
         text = msp.add_text(
             attribution,
-            height=3.0,  # meters; legible at typical context-plan scales
+            height=3.0 * u,  # 3 m; legible at typical context-plan scales
             dxfattribs={"layer": "NOTES"},
         )
         text.set_placement(
-            (extents.extmin.x, extents.extmin.y - 6.0),
+            (extents.extmin.x, extents.extmin.y - 6.0 * u),
             align=TextEntityAlignment.TOP_LEFT,
         )
 
     if extents.has_data:
-        _draw_scale_bar(msp, doc, extents)
+        _draw_scale_bar(msp, doc, extents, u=u)
 
     # Entities are already added bottom-to-top in the order above, but some
     # viewers regenerate by entity type rather than raw insertion order
@@ -363,7 +381,7 @@ def export_dxf(
     # Declare real-world units: modelspace is meters. Without $INSUNITS a DXF
     # is unitless and importers guess (Rhino defaulted to mm, shrinking the
     # whole site 1000x on import — a tree read as "10 mm"). 6 = meters.
-    doc.header["$INSUNITS"] = 6
+    doc.header["$INSUNITS"] = UNIT_INSUNITS[units]
     doc.header["$MEASUREMENT"] = 1  # metric
 
     doc.saveas(str(output_path))
@@ -490,7 +508,23 @@ def _draw_multipolygon_outlines(msp, mpoly, poly_rings_fn, layer_name: str):
             msp.add_lwpolyline(hole, close=True, dxfattribs={"layer": layer_name})
 
 
-def _draw_multipolygon_hatches(msp, mpoly, poly_rings_fn, layer_name: str, lt_style: dict):
+def _scale_pattern_definition(definition: list, u: float) -> list:
+    """Scale a hand-tuned AutoCAD pattern definition (authored in meters) into
+    the output drawing unit: base point, offset vector and dash lengths all
+    multiply by `u`; angles are unit-free. Without this, a unit-converting
+    importer keeps the numeric spacing (0.3 m -> 0.3 mm) and the pattern
+    collapses into invisible dust — the whole point of unit-native export."""
+    if u == 1.0:
+        return definition
+    return [
+        [angle, (base[0] * u, base[1] * u), (off[0] * u, off[1] * u),
+         [d * u for d in dashes]]
+        for angle, base, off, dashes in definition
+    ]
+
+
+def _draw_multipolygon_hatches(msp, mpoly, poly_rings_fn, layer_name: str, lt_style: dict,
+                               u: float = 1.0):
     if mpoly.is_empty:
         return
     polys = list(mpoly.geoms) if hasattr(mpoly, "geoms") else [mpoly]
@@ -507,7 +541,7 @@ def _draw_multipolygon_hatches(msp, mpoly, poly_rings_fn, layer_name: str, lt_st
     # Deriving a correct scale needs the eventual print/plot scale, which
     # isn't tracked yet, so an explicit `hatch_scale` override bypasses the
     # broken auto-conversion until that's wired up.
-    scale = lt_style.get("hatch_scale", spacing / 25.4)
+    scale = lt_style.get("hatch_scale", spacing / 25.4) * u
 
     for poly in polys:
         exterior, holes = poly_rings_fn(poly)
@@ -521,7 +555,7 @@ def _draw_multipolygon_hatches(msp, mpoly, poly_rings_fn, layer_name: str, lt_st
             "lineweight": HATCH_LINEWEIGHT,
             # Below the drawing plane so linework always wins the depth test
             # (see LAND_HATCH_Z) — XY stays exactly on the region boundary.
-            "elevation": (0, 0, LAND_HATCH_Z),
+            "elevation": (0, 0, LAND_HATCH_Z * u),
         })
         hatch.rgb = _hex_to_rgb(lt_style.get("hatch_color")) if lt_style.get("hatch_color") else HATCH_RGB
         hatch.paths.add_polyline_path(exterior, is_closed=True)
@@ -542,7 +576,7 @@ def _draw_multipolygon_hatches(msp, mpoly, poly_rings_fn, layer_name: str, lt_st
             name = lt_style["hatch_pattern"]
             hatch.set_pattern_fill(
                 name, scale=1.0, angle=0.0,
-                definition=ACAD_PATTERNS[name],
+                definition=_scale_pattern_definition(ACAD_PATTERNS[name], u),
             )
         elif hatch_type == "lines":
             hatch.set_pattern_fill("LINE", scale=scale, angle=angle)
@@ -567,26 +601,29 @@ def _nice_round(x: float) -> float:
     return min(candidates, key=lambda c: abs(c - x))
 
 
-def _draw_scale_bar(msp, doc, extents):
+def _draw_scale_bar(msp, doc, extents, u: float = 1.0):
     """
     Architect-style alternating scale bar at the bottom-right of the drawing.
 
-    Sized to a nice round length (~SCALE_BAR_FRACTION of the site width) so it
-    stays proportionate at any site size. Graphic follows the reference style:
-    a baseline with end ticks, the first half subdivided into five units with
-    alternating raised boxes (over units 1, 3 and 5), the second half a single
-    plain run; numeric labels under each subdivision and the total labelled
-    with its unit. Drawn in model units (meters) so it scales with the plan.
+    Sized to a nice round length in METERS (~SCALE_BAR_FRACTION of the site
+    width) so it stays proportionate at any site size, then drawn in the
+    output unit (`u` = meters -> drawing-unit factor). Labels always read in
+    meters regardless of the drawing unit — the bar states real-world lengths.
+    Graphic follows the reference style: one square-wave outline, first half
+    subdivided into five units with alternating raised segments, second half a
+    single plain run.
     """
-    width = extents.extmax.x - extents.extmin.x
-    total = _nice_round(width * SCALE_BAR_FRACTION)
-    unit = total / 10.0                      # five labelled units in first half
+    width_m = (extents.extmax.x - extents.extmin.x) / u
+    total_m = _nice_round(width_m * SCALE_BAR_FRACTION)
+    unit_m = total_m / 10.0                  # five labelled units in first half
+    total = total_m * u                      # drawn size, in output units
+    unit = unit_m * u
     box_h = 0.04 * total
-    text_h = max(1.5, 0.05 * total)
+    text_h = max(1.5 * u, 0.05 * total)
 
     x1 = extents.extmax.x                    # right-aligned with the drawing
     x0 = x1 - total
-    y = extents.extmin.y - 8.0               # just below the site, clear of it
+    y = extents.extmin.y - 8.0 * u           # just below the site, clear of it
 
     _add_layer(doc, "SCALEBAR", "#000000", 0.18)
     attribs = {"layer": "SCALEBAR"}
@@ -604,10 +641,10 @@ def _draw_scale_bar(msp, doc, extents):
     pts += [(x1, up)]                        # end tick
     msp.add_lwpolyline(pts, dxfattribs=attribs)
 
-    for i in range(6):                       # 0..5 unit labels
-        label = f"{i * unit:g}"
+    for i in range(6):                       # 0..5 unit labels (in meters)
+        label = f"{i * unit_m:g}"
         t = msp.add_text(label, height=text_h, dxfattribs=attribs)
         t.set_placement((x0 + i * unit, y - text_h * 0.5),
                         align=TextEntityAlignment.TOP_CENTER)
-    t = msp.add_text(f"{total:g} m", height=text_h, dxfattribs=attribs)
+    t = msp.add_text(f"{total_m:g} m", height=text_h, dxfattribs=attribs)
     t.set_placement((x1, y - text_h * 0.5), align=TextEntityAlignment.TOP_CENTER)

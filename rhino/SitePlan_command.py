@@ -75,11 +75,15 @@ def _ask_options():
     if interval_raw is None:
         return None, None, None
     interval_m = _parse_interval(interval_raw)
-    style = None
+    # Ask the backend to write the DXF NATIVELY in this document's unit —
+    # no unit conversion on import, so hatch pattern spacings stay correct.
+    doc_units = {2: "mm", 3: "cm", 4: "m", 8: "in", 9: "ft"}.get(
+        rs.UnitSystem(), "m")
+    style = {"units": doc_units}
     if interval_m is None:          # 0 / unparsable → skip contours
         layers.remove("contours")
     else:
-        style = {"contours": {"interval_m": interval_m}}
+        style["contours"] = {"interval_m": interval_m}
     options = {"land_types_engine": engine, "crown_size_scale": 1.5}
     return layers, options, style
 
@@ -122,8 +126,9 @@ def run():
                       "\n\nRe-run later to get them (results are cached once "
                       "a fetch succeeds).", title="SitePlan")
 
-    # Import the DXF into the active document. The file declares meters
-    # ($INSUNITS=6); Rhino scales it into the document's units automatically.
+    # Import the DXF into the active document. The file is written NATIVELY
+    # in this document's unit (we sent it with the request), so no unit
+    # conversion happens on import — geometry AND hatch spacing arrive true.
     rs.Command('_-Import "{}" _Enter'.format(path), echo=False)
     rs.ZoomExtents()
     rs.Prompt("SitePlan: imported {}".format(os.path.basename(path)))

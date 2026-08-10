@@ -285,6 +285,7 @@ def export_dxf_for(job: Job, style: Optional[StyleConfig]) -> Path:
         land_types=g["land_types"],
         contours=(g.get("contours") or None) if sc.contours.visible else None,
         style=style_dict,
+        units=sc.units,
         scale_m_per_px=g["scale"],
         origin_px=g["origin_px"],
         attribution=g["attribution"],
