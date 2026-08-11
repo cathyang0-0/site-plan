@@ -94,7 +94,7 @@ def export_dxf(
     units: str = "m",                # output drawing unit (see UNIT_FACTOR)
 ):
     """
-    Assemble all geometry into a layered DXF R2018 file.
+    Assemble all geometry into a layered DXF R2010 file.
 
     Args:
         output_path:        where to write the .dxf file
@@ -114,7 +114,14 @@ def export_dxf(
     # NOTE: pixel-domain math (fillet radius, road widths) keeps using
     # scale_m_per_px — only the px->drawing conversions below use upx.
 
-    doc = ezdxf.new("R2018", setup=True)
+    # R2010, deliberately NOT the newest dialect: Rhino 8's R2018 reader was
+    # observed losing parser sync on this exporter's full-size files —
+    # dropping the ROOFS/CONTOURS entities wholesale and re-assigning others
+    # to wrong layers (46 curves onto TREES, hatches swapped between
+    # LANDTYPE layers) — while the identical content saved as R2010 imports
+    # perfectly. The file audits clean (ezdxf recover: 0 errors), and nothing
+    # this exporter writes needs post-R2010 features.
+    doc = ezdxf.new("R2010", setup=True)
     msp = doc.modelspace()
 
     def px_to_m(px_coord):
