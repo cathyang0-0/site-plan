@@ -24,7 +24,6 @@ import siteplan_client as spc
 
 STICKY_KEY = "siteplan_last_bbox"
 
-
 def _ask_bbox():
     """Prompt for WEST,SOUTH,EAST,NORTH (lon/lat). Remembers the last one."""
     default = sc.sticky.get(STICKY_KEY, "-76.5515,42.5305,-76.5415,42.5385")
@@ -129,7 +128,20 @@ def run():
     # Import the DXF into the active document. The file is written NATIVELY
     # in this document's unit (we sent it with the request), so no unit
     # conversion happens on import — geometry AND hatch spacing arrive true.
-    rs.Command('_-Import "{}" _Enter'.format(path), echo=False)
+    #
+    # IMPORTANT: use RhinoDoc.Import (the same engine as manual File > Import),
+    # NOT the scripted '_-Import' macro. Scripted -Import was observed to
+    # SCRAMBLE these plans on every run — ROOFS/CONTOURS entities dropped,
+    # curves re-assigned to wrong layers, hatches swapped (faking overlap) —
+    # while manual imports of the identical files were always perfect. Chasing
+    # that difference cost a full day; do not switch back.
+    imported = False
+    try:
+        imported = bool(sc.doc.Import(path))
+    except AttributeError:      # very old Rhino: no RhinoDoc.Import
+        pass
+    if not imported:
+        rs.Command('_-Import "{}" _Enter'.format(path), echo=False)
     rs.ZoomExtents()
     rs.Prompt("SitePlan: imported {}".format(os.path.basename(path)))
 
