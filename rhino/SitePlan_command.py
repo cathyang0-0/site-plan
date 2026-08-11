@@ -133,6 +133,26 @@ def run():
     rs.ZoomExtents()
     rs.Prompt("SitePlan: imported {}".format(os.path.basename(path)))
 
+    # Ground-truth report: count what ACTUALLY landed in this document, per
+    # layer. If a count here is non-zero but you can't see that layer's
+    # geometry, the problem is display/layer state — not the import. If a
+    # count is zero, the import genuinely dropped it. (Added after a long
+    # debugging session where the file was repeatedly proven correct while
+    # the on-screen result disagreed.)
+    report = []
+    for name in sorted(rs.LayerNames() or []):
+        objs = rs.ObjectsByLayer(name) or []
+        if objs:
+            report.append("{}: {}".format(name, len(objs)))
+    rs.MessageBox(
+        "Imported into the ACTIVE document ({}):\n\n{}\n\nDXF file: {}".format(
+            os.path.basename(sc.doc.Path or "untitled"),
+            "\n".join(report) or "(nothing!)",
+            path,
+        ),
+        title="SitePlan import report",
+    )
+
 
 if __name__ == "__main__":
     run()
