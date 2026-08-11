@@ -46,9 +46,9 @@ HATCH_RGB = (200, 200, 200)   # light gray
 # attribute; Rhino ignores DXF's SORTENTSTABLE on import), so coplanar hatches
 # and curves z-fight and hatch pattern lines can render over the roof outline
 # stroke, visually thinning it. Sinking the land hatches slightly below the
-# drawing plane makes every depth-
-# tested viewer draw curves (at z=0) on top deterministically. Centimeters of
-# depth are invisible in plan and boundaries stay perfectly aligned in XY.
+# drawing plane makes every depth-tested viewer draw curves (at z=0) on top
+# deterministically. Centimeters of depth are invisible in plan and
+# boundaries stay perfectly aligned in XY.
 LAND_HATCH_Z = -0.10
 # Contours sit at the very bottom of the staircase — under the land hatches —
 # per the user's spec (near-hairline light gray, bottom-most draw order).
@@ -66,17 +66,6 @@ UNIT_INSUNITS = {"in": 1, "ft": 2, "mm": 4, "cm": 5, "m": 6}
 
 # Scale bar: target fraction of the site width; snapped to a nice round length.
 SCALE_BAR_FRACTION = 0.15
-
-# $SORTENTS (header var 280) bitcode -- which operations respect the explicit
-# SORTENTSTABLE redraw order instead of raw entity/handle order:
-#   1 = object selection, 2 = object snap, 16 = REGEN, 32 = plotting/printing
-# (4, 8, 64 are obsolete legacy bits and are intentionally left unset)
-SORTENTS_SELECTION = 1
-SORTENTS_SNAP = 2
-SORTENTS_REGEN = 16
-SORTENTS_PLOTTING = 32
-SORTENTS_ALL = SORTENTS_SELECTION | SORTENTS_SNAP | SORTENTS_REGEN | SORTENTS_PLOTTING
-
 
 def _nearest_dxf_lineweight(mm: float) -> int:
     """Snap an arbitrary mm value to the nearest DXF-valid lineweight code
@@ -244,15 +233,25 @@ def export_dxf(
                    c_style.get("color", "#dcdcdc"),
                    c_style.get("line_weight_mm", 0.05))
         for c in contours:
-            pts = [px_to_m(p) for p in c["points"]]
-            if len(pts) < 2:
+            if len(c["points"]) < 2:
                 continue
-            msp.add_lwpolyline(pts, dxfattribs={
-                "layer": "CONTOURS",
-                # Bottom of the Z staircase: under land hatches, so every
-                # depth-tested viewer draws hatches and linework over them.
-                "elevation": CONTOUR_Z * u,
-            })
+            geom = LineString(c["points"])
+            # Clip out the runs crossing building footprints — roof interiors
+            # are empty paper (no white mask fill anymore), so an unclipped
+            # contour would draw straight through a building.
+            if buildings_union is not None:
+                geom = geom.difference(buildings_union)
+            parts = geom.geoms if hasattr(geom, "geoms") else [geom]
+            for part in parts:
+                if part.is_empty or part.geom_type != "LineString":
+                    continue
+                pts = [px_to_m(p) for p in part.coords]
+                msp.add_lwpolyline(pts, dxfattribs={
+                    "layer": "CONTOURS",
+                    # Bottom of the Z staircase: under land hatches, so every
+                    # depth-tested viewer draws hatches and linework over them.
+                    "elevation": CONTOUR_Z * u,
+                })
 
     # --- Land type hatches (drawn first — bottommost), one layer per type ---
     for i, lt in enumerate(land_types):
@@ -362,18 +361,12 @@ def export_dxf(
     if extents.has_data:
         _draw_scale_bar(msp, doc, extents, u=u)
 
-    # Entities are already added bottom-to-top in the order above, but some
-    # viewers regenerate by entity type rather than raw insertion order
-    # (e.g. all HATCH entities before all INSERT/LWPOLYLINE entities),
-    # which breaks the roof-fill-masks-everything-below effect. Writing an
-    # explicit AutoCAD redraw order (SORTENTSTABLE) forces every compliant
-    # viewer to respect the intended stacking regardless of entity type.
-    # SORTENTS_ALL includes bit 32 (plotting/print preview) -- a bare REGEN
-    # bit (16) alone does not affect what a print-preview view shows.
-    doc.header["$SORTENTS"] = SORTENTS_ALL
-    msp.set_redraw_order({
-        entity.dxf.handle: f"{i:X}" for i, entity in enumerate(msp)
-    })
+    # NO SORTENTSTABLE: draw order is carried entirely by the Z staircase +
+    # bottom-to-top entity order. The explicit redraw-order table was
+    # belt-and-suspenders that became a liability — a 1000+-entry table was
+    # the prime suspect when Rhino's importer dropped whole layers, and no
+    # target viewer needs it (Rhino ignores it at best; AutoCAD respects the
+    # Z/entity order fine).
 
     # Declare real-world units: modelspace is meters. Without $INSUNITS a DXF
     # is unitless and importers guess (Rhino defaulted to mm, shrinking the

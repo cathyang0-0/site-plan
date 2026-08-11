@@ -72,6 +72,49 @@ class TestChaikinOpen:
         assert not any(tuple(p) == (10.0, 0.0) for p in out)
 
 
+class TestContourBuildingClip:
+    def test_contour_broken_where_it_crosses_a_building(self, tmp_path):
+        # Roof interiors are empty paper (no white mask), so contours must be
+        # clipped out under buildings — one line crossing a footprint becomes
+        # two segments with a gap.
+        import ezdxf
+        from shapely.geometry import Polygon
+        from app.export.dxf import export_dxf
+        out = tmp_path / "clip.dxf"
+        building = Polygon([(40, 0), (60, 0), (60, 30), (40, 30)])
+        export_dxf(
+            output_path=out, buildings=[building], roads=[],
+            tree_placements=[], tree_block_curves=[[[(0, 0), (1, 0), (1, 1)]]],
+            land_types=[], style={}, scale_m_per_px=1.0, origin_px=(0, 0),
+            contours=[{"points": [(0, 15), (100, 15)], "level": 5.0}],
+        )
+        doc = ezdxf.readfile(str(out))
+        segs = [e for e in doc.modelspace().query("LWPOLYLINE")
+                if e.dxf.layer == "CONTOURS"]
+        assert len(segs) == 2  # split by the building
+        xs = sorted(x for e in segs for x, y in e.get_points("xy"))
+        assert 39.5 <= xs[1] <= 40.5 and 59.5 <= xs[2] <= 60.5  # gap = footprint
+
+    def test_no_sortents_table_written(self, tmp_path):
+        # The 1000+-entry redraw-order table was the prime suspect when
+        # Rhino's importer dropped whole layers; draw order is carried by the
+        # Z staircase + entity order instead. Keep the export free of it.
+        import ezdxf
+        from shapely.geometry import Polygon
+        from app.export.dxf import export_dxf
+        out = tmp_path / "nosort.dxf"
+        export_dxf(
+            output_path=out, buildings=[Polygon([(0, 0), (10, 0), (10, 10)])],
+            roads=[], tree_placements=[], tree_block_curves=[[[(0, 0), (1, 0), (1, 1)]]],
+            land_types=[], style={}, scale_m_per_px=1.0, origin_px=(0, 0),
+        )
+        doc = ezdxf.readfile(str(out))
+        msp = doc.modelspace()
+        br = msp.block_record
+        assert not (br.has_extension_dict and
+                    "ACAD_SORTENTS" in br.get_extension_dict().dictionary)
+
+
 class TestExportWiring:
     def test_contours_layer_bottom_of_table_and_staircase(self, tmp_path):
         import ezdxf
