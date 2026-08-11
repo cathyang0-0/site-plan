@@ -114,13 +114,12 @@ def export_dxf(
     # NOTE: pixel-domain math (fillet radius, road widths) keeps using
     # scale_m_per_px — only the px->drawing conversions below use upx.
 
-    # R2010, deliberately NOT the newest dialect: Rhino 8's R2018 reader was
-    # observed losing parser sync on this exporter's full-size files —
-    # dropping the ROOFS/CONTOURS entities wholesale and re-assigning others
-    # to wrong layers (46 curves onto TREES, hatches swapped between
-    # LANDTYPE layers) — while the identical content saved as R2010 imports
-    # perfectly. The file audits clean (ezdxf recover: 0 errors), and nothing
-    # this exporter writes needs post-R2010 features.
+    # R2010, deliberately not the newest dialect: nothing this exporter
+    # writes needs post-R2010 features, and the older dialect maximizes
+    # importer compatibility. (An earlier comment blamed Rhino's R2018
+    # reader for scrambled imports — that was a confounded experiment; the
+    # actual culprit was Rhino's scripted '_-Import' macro, fixed on the
+    # Rhino-command side by using RhinoDoc.Import instead.)
     doc = ezdxf.new("R2010", setup=True)
     msp = doc.modelspace()
 
