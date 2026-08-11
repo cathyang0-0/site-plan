@@ -160,20 +160,27 @@ class TestLayerStackingAndAnnotations:
 
     def test_z_staircase_fills_below_linework(self, tmp_path):
         # DXF can't carry Rhino draw order (BringToFront is Rhino-side, and
-        # Rhino ignores SORTENTSTABLE), so fills are sunk slightly below the
-        # z=0 drawing plane: land hatches lowest, roof fill above them, all
-        # linework on top. Depth-tested viewers then always draw outlines over
-        # hatches, with XY untouched.
-        from app.export.dxf import LAND_HATCH_Z, ROOF_FILL_Z
-        assert LAND_HATCH_Z < ROOF_FILL_Z < 0
+        # Rhino ignores SORTENTSTABLE), so hatches are sunk slightly below the
+        # z=0 drawing plane; all linework stays on it. Depth-tested viewers
+        # then always draw outlines over hatches, with XY untouched.
+        from app.export.dxf import LAND_HATCH_Z
+        assert LAND_HATCH_Z < 0
         doc = _export_with_landtype(tmp_path)
         msp = doc.modelspace()
         land = [h for h in msp.query("HATCH") if h.dxf.layer == "LANDTYPE_1"][0]
-        fill = [h for h in msp.query("HATCH") if h.dxf.layer == "ROOFS_FILL"][0]
         assert abs(land.dxf.elevation.z - LAND_HATCH_Z) < 1e-9
-        assert abs(fill.dxf.elevation.z - ROOF_FILL_Z) < 1e-9
         outline = [e for e in msp.query("LWPOLYLINE") if e.dxf.layer == "ROOFS"][0]
         assert outline.dxf.elevation == 0.0  # linework stays on the plane
+
+    def test_no_white_roof_fill(self, tmp_path):
+        # Rhino renders pure-white objects BLACK on a white background, so a
+        # white "mask" fill becomes a black blob swallowing the roof outline
+        # (verified by import A/B test). Roof masking must stay geometric
+        # (roads/land clipped against footprints), never a white hatch.
+        doc = _export_with_landtype(tmp_path)
+        msp = doc.modelspace()
+        assert [h for h in msp.query("HATCH") if h.dxf.layer == "ROOFS_FILL"] == []
+        assert "ROOFS_FILL" not in [l.dxf.name for l in doc.layers]
 
     def test_scale_bar_is_single_square_wave(self, tmp_path):
         # Reference style: one continuous alternating outline — no closed

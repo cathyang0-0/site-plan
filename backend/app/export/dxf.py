@@ -2,7 +2,8 @@
 DXF export using ezdxf.
 
 Layer drawing order (bottom to top):
-  CONTOURS → LANDTYPE_* → ROADS → TREES → ROOFS (white fill) → ROOFS (outline)
+  CONTOURS → LANDTYPE_* → ROADS → TREES → ROOFS (outline; interiors are
+  empty paper via geometric clipping — no white fill, Rhino renders white as black)
 
 All coordinates are in meters, local origin at site bounding box center.
 
@@ -45,11 +46,10 @@ HATCH_RGB = (200, 200, 200)   # light gray
 # attribute; Rhino ignores DXF's SORTENTSTABLE on import), so coplanar hatches
 # and curves z-fight and hatch pattern lines can render over the roof outline
 # stroke, visually thinning it. Sinking the land hatches slightly below the
-# drawing plane and the white roof fills just above them makes every depth-
+# drawing plane makes every depth-
 # tested viewer draw curves (at z=0) on top deterministically. Centimeters of
 # depth are invisible in plan and boundaries stay perfectly aligned in XY.
 LAND_HATCH_Z = -0.10
-ROOF_FILL_Z = -0.05
 # Contours sit at the very bottom of the staircase — under the land hatches —
 # per the user's spec (near-hairline light gray, bottom-most draw order).
 CONTOUR_Z = -0.15
@@ -198,7 +198,6 @@ def export_dxf(
             style.get("trees", {}).get("color", "#333333"),
             style.get("trees", {}).get("line_weight_mm", DEFAULT_LINE_WEIGHT_MM["TREES"]),
         )
-        _add_layer(doc, "ROOFS_FILL", "#ffffff", 0.0, aci=255)  # true white, never swaps with background
         _add_layer(
             doc, "ROOFS",
             style.get("roofs", {}).get("color", "#000000"),
@@ -329,16 +328,14 @@ def export_dxf(
                 },
             )
 
-    # --- Roofs: white fill hatch (masks everything below) ---
-    for poly in buildings:
-        pts = poly_pts(poly)
-        hatch = msp.add_hatch(color=255, dxfattribs={
-            "layer": "ROOFS_FILL",  # ACI 255 = true white, never swaps
-            # Above the land hatches but still below all linework (Z staircase).
-            "elevation": (0, 0, ROOF_FILL_Z * u),
-        })
-        hatch.paths.add_polyline_path(pts, is_closed=True)
-        hatch.set_pattern_fill("SOLID")
+    # NO white roof-fill hatch: Rhino draws pure-white objects BLACK on a
+    # white background (adaptive display color), so a white "mask" fill
+    # renders as solid black blobs swallowing the roof outlines (verified by
+    # A/B test on import). Masking is GEOMETRIC instead — roads and land-type
+    # regions are clipped against building footprints above, so roof
+    # interiors are genuinely empty paper. Trees may overlap roofs by up to
+    # 30% by design; that reads as canopy over the building, as in the
+    # user's reference plans.
 
     # --- Roofs: outline on top ---
     for poly in buildings:

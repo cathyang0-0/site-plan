@@ -81,20 +81,23 @@ ACAD_PATTERNS = {
     ],
 }
 
+# Hatch color is BLACK to match the user's hand-tuned reference plan: their
+# hatching reads as thin black texture, kept quiet by the hairline lineweight
+# and pattern sparsity, not by a light color. (The earlier light grays were
+# near-invisible on screen in Rhino — patterns rendered fine but couldn't be
+# seen at hairline weight.)
 DEFAULT_HATCH_STYLES = {
     "water":                 {"hatch_type": "acad", "hatch_pattern": "AR-RROOF",
-                              "hatch_color": "#c8c8c8"},
+                              "hatch_color": "#000000"},
     "vegetation":            {"hatch_type": "acad", "hatch_pattern": "AR-SAND",
-                              "hatch_color": "#c8c8c8"},
+                              "hatch_color": "#000000"},
     "bare earth / farmland": {"hatch_type": "acad", "hatch_pattern": "LINE45",
-                              "hatch_color": "#c8c8c8"},
-    # Speckle is inherently the densest pattern, so keep paved near-white so it
-    # stays the quietest of the ground covers.
+                              "hatch_color": "#000000"},
     "paved / hardscape":     {"hatch_type": "acad", "hatch_pattern": "AR-CONC",
-                              "hatch_color": "#ececec"},
+                              "hatch_color": "#000000"},
 }
 _FALLBACK_HATCH_STYLE = {"hatch_type": "lines", "hatch_angle_deg": 0.0, "hatch_scale": 3.0,
-                         "hatch_color": "#c8c8c8"}
+                         "hatch_color": "#000000"}
 
 
 def default_hatch_style(label: str) -> dict:
