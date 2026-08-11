@@ -106,6 +106,30 @@ def default_hatch_style(label: str) -> dict:
     return dict(DEFAULT_HATCH_STYLES.get(label, _FALLBACK_HATCH_STYLE))
 
 
+def apply_authoritative_water(land_types: list[dict], water_polys: list) -> list[dict]:
+    """Make fetched (Overture) water the single source of truth in a land-type
+    list: drop the engine-detected water entry, carve the water region out of
+    every remaining cover (the engines mislabel open water as vegetation/bare/
+    paved on featureless tiles, leaving covers floating on the lake), drop
+    covers swallowed whole, and prepend the authoritative water. No-op when
+    water_polys is empty. Shared by poc.py and the API runner so the two
+    paths can't drift (they did once — the API skipped the carve)."""
+    if not water_polys:
+        return land_types
+    from shapely.geometry import MultiPolygon
+    from shapely.ops import unary_union
+
+    land_types = [lt for lt in land_types if lt["label"] != "water"]
+    water_union = unary_union(water_polys)
+    for lt in land_types:
+        lt["polygons"] = _as_multipolygon(lt["polygons"].difference(water_union))
+    land_types = [lt for lt in land_types if not lt["polygons"].is_empty]
+    land_types.insert(0, {"label": "water",
+                          "polygons": MultiPolygon(water_polys),
+                          "style": default_hatch_style("water")})
+    return land_types
+
+
 def detect_land_types(
     image: Image.Image,
     building_mask: np.ndarray,

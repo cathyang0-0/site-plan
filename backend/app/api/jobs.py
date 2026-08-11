@@ -205,12 +205,10 @@ def _run_pipeline(job: Job) -> None:
         land_types = [{"label": d["label"], "polygons": d["polygons"],
                        "style": default_hatch_style(d["label"])}
                       for d in detected]
-        if water_polys:  # Overture water is authoritative — replace detected
-            from shapely.geometry import MultiPolygon
-            land_types = [lt for lt in land_types if lt["label"] != "water"]
-            land_types.insert(0, {"label": "water",
-                                  "polygons": MultiPolygon(water_polys),
-                                  "style": default_hatch_style("water")})
+        # Overture water is authoritative: replaces detected water AND is
+        # carved out of every other cover (no land hatch over the water hatch).
+        from app.pipeline.landtypes import apply_authoritative_water
+        land_types = apply_authoritative_water(land_types, water_polys)
         stage("land_types", "done")
     else:
         stage("land_types", "skipped")

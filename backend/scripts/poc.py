@@ -393,24 +393,11 @@ def main():
                  "style": default_hatch_style(d["label"])}
                 for d in detected
             ]
-            if water_polys:  # Overture water is authoritative — swap out the seg water
-                land_types = [lt for lt in land_types if lt["label"] != "water"]
-                # The engine also mislabels open water as vegetation/bare/paved
-                # (OOD tiles), leaving those covers floating on the lake. The
-                # authoritative water outranks them too: carve it out of every
-                # remaining land type, dropping types it swallows whole.
-                from shapely.ops import unary_union as _uu
-                from app.pipeline.landtypes import _as_multipolygon
-                water_union = _uu(water_polys)
-                for lt in land_types:
-                    lt["polygons"] = _as_multipolygon(
-                        lt["polygons"].difference(water_union))
-                land_types = [lt for lt in land_types if not lt["polygons"].is_empty]
-                land_types.insert(0, {
-                    "label": "water",
-                    "polygons": MultiPolygon(water_polys),
-                    "style": default_hatch_style("water"),
-                })
+            # Overture water is authoritative: replaces detected water and is
+            # carved out of every other cover (shared helper — keeps this path
+            # and the API runner from drifting).
+            from app.pipeline.landtypes import apply_authoritative_water
+            land_types = apply_authoritative_water(land_types, water_polys)
             print(f"  Land types: {', '.join(d['label'] for d in land_types)}")
         if args.real_trees:
             # >30% building-overlap rule suppresses rooftop tree detections.

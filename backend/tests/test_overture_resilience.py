@@ -79,6 +79,50 @@ class TestCache:
         assert fetch_water_footprints(-1.0, -1.0, 1.0, 1.0) == ["sentinel"]
 
 
+class TestAuthoritativeWater:
+    def _land(self):
+        from shapely.geometry import Polygon, MultiPolygon
+        veg = MultiPolygon([Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])])
+        detected_water = MultiPolygon([Polygon([(20, 20), (25, 20), (25, 25), (20, 25)])])
+        return [
+            {"label": "vegetation", "polygons": veg, "style": {}},
+            {"label": "water", "polygons": detected_water, "style": {}},
+        ]
+
+    def test_carves_water_out_of_other_covers(self):
+        # Overture water overlapping the vegetation must bite it away — no
+        # land hatch may overlap the water hatch (the bug seen in Rhino).
+        from shapely.geometry import Polygon
+        from app.pipeline.landtypes import apply_authoritative_water
+        water = [Polygon([(5, 0), (10, 0), (10, 10), (5, 10)])]  # right half of veg
+        out = apply_authoritative_water(self._land(), water)
+        assert out[0]["label"] == "water"          # authoritative water first
+        veg = [lt for lt in out if lt["label"] == "vegetation"][0]
+        assert veg["polygons"].area == pytest.approx(50)   # half carved away
+        assert not veg["polygons"].intersects(out[0]["polygons"].buffer(-1e-9))
+
+    def test_replaces_detected_water(self):
+        from shapely.geometry import Polygon
+        from app.pipeline.landtypes import apply_authoritative_water
+        water = [Polygon([(50, 50), (60, 50), (60, 60), (50, 60)])]
+        out = apply_authoritative_water(self._land(), water)
+        waters = [lt for lt in out if lt["label"] == "water"]
+        assert len(waters) == 1
+        assert waters[0]["polygons"].geoms[0].bounds == (50, 50, 60, 60)
+
+    def test_swallowed_cover_dropped(self):
+        from shapely.geometry import Polygon
+        from app.pipeline.landtypes import apply_authoritative_water
+        water = [Polygon([(-1, -1), (11, -1), (11, 11), (-1, 11)])]  # covers veg fully
+        out = apply_authoritative_water(self._land(), water)
+        assert [lt["label"] for lt in out] == ["water"]
+
+    def test_no_water_is_noop(self):
+        from app.pipeline.landtypes import apply_authoritative_water
+        land = self._land()
+        assert apply_authoritative_water(land, []) is land
+
+
 class TestDegradation:
     def test_failed_stage_warns_and_continues(self):
         from app.api.jobs import Job, _overture_stage
