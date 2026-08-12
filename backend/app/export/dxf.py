@@ -504,10 +504,6 @@ def _draw_multipolygon_outlines(msp, mpoly, poly_rings_fn, layer_name: str):
     if mpoly.is_empty:
         return
     polys = list(mpoly.geoms) if hasattr(mpoly, "geoms") else [mpoly]
-    if tile_px:
-        polys = [piece for poly in polys
-                 for piece in _grid_split_polygon(poly, tile_px)]
-
     for poly in polys:
         exterior, holes = poly_rings_fn(poly)
         msp.add_lwpolyline(exterior, close=True, dxfattribs={"layer": layer_name})
@@ -530,6 +526,51 @@ def _scale_pattern_definition(definition: list, u: float) -> list:
          [d * u for d in dashes]]
         for angle, base, off, dashes in definition
     ]
+
+
+def _hatch_safe_polygons(poly) -> list:
+    """Guarantee a polygon is safe to use as a hatch boundary: every ring must
+    be SIMPLE (no self-intersection, no self-touching) — Rhino refuses to
+    render a hatch whose boundary self-intersects, including single-point
+    pinches that shapely's boolean ops routinely produce and that OGC calls
+    valid. (User-diagnosed on the Santa Barbara ocean hatch, whose outer ring
+    proved non-simple in the exported file.) Repairs via buffer(0), which
+    splits pinched/crossed rings into separate simple polygons; drops anything
+    unrepairable rather than write a hatch a CAD kernel will reject."""
+    def _rings_simple(g):
+        if not LineString(g.exterior.coords).is_simple:
+            return False
+        return all(LineString(r.coords).is_simple for r in g.interiors)
+
+    if poly.is_valid and _rings_simple(poly):
+        return [poly]
+    # make_valid (not buffer(0)) as the primary repair: buffer(0) silently
+    # DROPS the negatively-wound lobe of a crossed ring; make_valid keeps
+    # both lobes as separate polygons.
+    from shapely.validation import make_valid
+    repaired = make_valid(poly)
+    stack = [repaired]
+    out = []
+    while stack:
+        g = stack.pop()
+        if g.is_empty:
+            continue
+        if hasattr(g, "geoms"):          # Multi*/GeometryCollection
+            stack.extend(g.geoms)
+        elif g.geom_type == "Polygon":
+            if g.is_valid and _rings_simple(g):
+                out.append(g)
+            else:                        # residual pinch: buffer(0) splits it
+                fixed = g.buffer(0)
+                parts = fixed.geoms if hasattr(fixed, "geoms") else [fixed]
+                for q in parts:
+                    if (q.geom_type == "Polygon" and not q.is_empty
+                            and q.is_valid and _rings_simple(q)):
+                        out.append(q)
+                    elif not q.is_empty:
+                        print(f"  dropping unrepairable hatch boundary "
+                              f"({len(q.exterior.coords)} verts) on export")
+    return out
 
 
 def _grid_split_polygon(poly, tile: float) -> list:
@@ -576,9 +617,13 @@ def _draw_multipolygon_hatches(msp, mpoly, poly_rings_fn, layer_name: str, lt_st
     # broken auto-conversion until that's wired up.
     scale = lt_style.get("hatch_scale", spacing / 25.4) * u
 
+    # Sanitize BEFORE tiling (boolean ops on invalid geometry misbehave),
+    # tile, then sanitize again (clipping can introduce fresh pinch points).
+    polys = [q for p in polys for q in _hatch_safe_polygons(p)]
     if tile_px:
         polys = [piece for poly in polys
                  for piece in _grid_split_polygon(poly, tile_px)]
+        polys = [q for p in polys for q in _hatch_safe_polygons(p)]
 
     for poly in polys:
         exterior, holes = poly_rings_fn(poly)

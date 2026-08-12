@@ -172,6 +172,44 @@ class TestLayerStackingAndAnnotations:
         outline = [e for e in msp.query("LWPOLYLINE") if e.dxf.layer == "ROOFS"][0]
         assert outline.dxf.elevation == 0.0  # linework stays on the plane
 
+    def test_self_intersecting_boundary_repaired_before_hatching(self, tmp_path):
+        # Rhino refuses hatches with self-intersecting boundaries (the SB
+        # ocean bug, user-diagnosed). A bowtie ring must arrive as TWO simple
+        # hatches, and every exported ring must be simple.
+        import ezdxf
+        from shapely.geometry import Polygon, MultiPolygon, LineString
+        from app.export.dxf import export_dxf
+        out = tmp_path / "bowtie.dxf"
+        bowtie = Polygon([(0, 0), (100, 100), (100, 0), (0, 100)])  # crossing ring
+        export_dxf(
+            output_path=out, buildings=[], roads=[], tree_placements=[],
+            tree_block_curves=[[[(0, 0), (1, 0), (1, 1)]]],
+            land_types=[{"label": "vegetation",
+                         "polygons": MultiPolygon([bowtie]),
+                         "style": {"hatch_type": "acad",
+                                   "hatch_pattern": "AR-SAND"}}],
+            style={}, scale_m_per_px=1.0, origin_px=(50, 50),
+        )
+        doc = ezdxf.readfile(str(out))
+        hs = [h for h in doc.modelspace().query("HATCH")
+              if h.dxf.layer == "LANDTYPE_1"]
+        assert len(hs) == 2  # split into the two simple triangles
+        for h in hs:
+            for pp in h.paths:
+                if hasattr(pp, "vertices"):
+                    ring = [(v[0], v[1]) for v in pp.vertices]
+                    assert LineString(ring + ring[:1]).is_simple
+
+    def test_hatch_safe_polygons_unit(self):
+        from shapely.geometry import Polygon
+        from app.export.dxf import _hatch_safe_polygons
+        clean = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
+        assert _hatch_safe_polygons(clean) == [clean]  # untouched, identity
+        pinched = Polygon([(0, 0), (2, 0), (1, 1), (2, 2), (0, 2), (1, 1)])
+        parts = _hatch_safe_polygons(pinched)  # touches itself at (1,1)
+        assert len(parts) == 2
+        assert all(p.is_valid for p in parts)
+
     def test_giant_water_region_split_into_tile_hatches(self, tmp_path):
         # Rhino won't render the pattern of one giant complex hatch (verified
         # by A/B probe on the Santa Barbara ocean); regions larger than
