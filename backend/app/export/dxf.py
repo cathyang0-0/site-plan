@@ -19,7 +19,7 @@ import ezdxf.bbox
 from ezdxf import colors
 from ezdxf.enums import TextEntityAlignment
 from ezdxf.lldxf.const import VALID_DXF_LINEWEIGHTS
-from shapely.geometry import Polygon, MultiPolygon, LineString, MultiLineString
+from shapely.geometry import Polygon, MultiPolygon, LineString, MultiLineString, box as _sbox
 from shapely.ops import unary_union
 from pathlib import Path
 
@@ -63,6 +63,14 @@ CONTOUR_Z = -0.15
 UNIT_FACTOR = {"m": 1.0, "mm": 1000.0, "cm": 100.0,
                "ft": 1 / 0.3048, "in": 1 / 0.0254}
 UNIT_INSUNITS = {"in": 1, "ft": 2, "mm": 4, "cm": 5, "m": 6}
+
+# Rhino won't generate pattern lines for very large/complex hatches — an A/B
+# probe showed the Santa Barbara ocean as ONE 10-loop hatch renders EMPTY,
+# while the identical region split into ~300 m tiles renders perfectly. So any
+# land-cover polygon bigger than this tile (in meters) is grid-split before
+# hatching. Seams are invisible: hatch boundaries don't draw, and pattern
+# phase anchors at the global origin, so adjacent tiles align exactly.
+HATCH_TILE_M = 300.0
 
 # Scale bar: target fraction of the site width; snapped to a nice round length.
 SCALE_BAR_FRACTION = 0.15
@@ -274,7 +282,8 @@ def export_dxf(
         if lt_style.get("outline_only", False):
             _draw_multipolygon_outlines(msp, polygons, poly_rings, layer_name)
         else:
-            _draw_multipolygon_hatches(msp, polygons, poly_rings, layer_name, lt_style, u=u)
+            _draw_multipolygon_hatches(msp, polygons, poly_rings, layer_name, lt_style,
+                                       u=u, tile_px=HATCH_TILE_M / scale_m_per_px)
 
     # Upper layers registered only now, so they land ABOVE every LANDTYPE_*
     # layer in the table (see the layer-order comment above).
@@ -495,6 +504,10 @@ def _draw_multipolygon_outlines(msp, mpoly, poly_rings_fn, layer_name: str):
     if mpoly.is_empty:
         return
     polys = list(mpoly.geoms) if hasattr(mpoly, "geoms") else [mpoly]
+    if tile_px:
+        polys = [piece for poly in polys
+                 for piece in _grid_split_polygon(poly, tile_px)]
+
     for poly in polys:
         exterior, holes = poly_rings_fn(poly)
         msp.add_lwpolyline(exterior, close=True, dxfattribs={"layer": layer_name})
@@ -519,8 +532,32 @@ def _scale_pattern_definition(definition: list, u: float) -> list:
     ]
 
 
+def _grid_split_polygon(poly, tile: float) -> list:
+    """Split a polygon into grid cells no larger than `tile` (in the polygon's
+    own coordinate space). Rhino silently refuses to render the hatch pattern
+    of very large/complex hatches (see HATCH_TILE_M); small tiles render
+    reliably and the seams are invisible (hatch boundaries don't draw, pattern
+    phase is anchored globally)."""
+    minx, miny, maxx, maxy = poly.bounds
+    if (maxx - minx) <= tile and (maxy - miny) <= tile:
+        return [poly]
+    out = []
+    x = minx
+    while x < maxx:
+        y = miny
+        while y < maxy:
+            piece = poly.intersection(_sbox(x, y, x + tile, y + tile))
+            if not piece.is_empty:
+                geoms = piece.geoms if hasattr(piece, "geoms") else [piece]
+                out.extend(g for g in geoms
+                           if g.geom_type == "Polygon" and g.area > 1e-9)
+            y += tile
+        x += tile
+    return out
+
+
 def _draw_multipolygon_hatches(msp, mpoly, poly_rings_fn, layer_name: str, lt_style: dict,
-                               u: float = 1.0):
+                               u: float = 1.0, tile_px: float | None = None):
     if mpoly.is_empty:
         return
     polys = list(mpoly.geoms) if hasattr(mpoly, "geoms") else [mpoly]
@@ -538,6 +575,10 @@ def _draw_multipolygon_hatches(msp, mpoly, poly_rings_fn, layer_name: str, lt_st
     # isn't tracked yet, so an explicit `hatch_scale` override bypasses the
     # broken auto-conversion until that's wired up.
     scale = lt_style.get("hatch_scale", spacing / 25.4) * u
+
+    if tile_px:
+        polys = [piece for poly in polys
+                 for piece in _grid_split_polygon(poly, tile_px)]
 
     for poly in polys:
         exterior, holes = poly_rings_fn(poly)

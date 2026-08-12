@@ -172,6 +172,37 @@ class TestLayerStackingAndAnnotations:
         outline = [e for e in msp.query("LWPOLYLINE") if e.dxf.layer == "ROOFS"][0]
         assert outline.dxf.elevation == 0.0  # linework stays on the plane
 
+    def test_giant_water_region_split_into_tile_hatches(self, tmp_path):
+        # Rhino won't render the pattern of one giant complex hatch (verified
+        # by A/B probe on the Santa Barbara ocean); regions larger than
+        # HATCH_TILE_M are grid-split into several hatches. At 0.3 m/px the
+        # tile is 1000 px, so a 3000x2800 px ocean must become many hatches.
+        import ezdxf
+        from shapely.geometry import Polygon, MultiPolygon
+        from app.export.dxf import export_dxf
+        out = tmp_path / "tiles.dxf"
+        ocean = MultiPolygon([Polygon([(0, 0), (3000, 0), (3000, 2800), (0, 2800)])])
+        export_dxf(
+            output_path=out, buildings=[], roads=[], tree_placements=[],
+            tree_block_curves=[[[(0, 0), (1, 0), (1, 1)]]],
+            land_types=[{"label": "water", "polygons": ocean,
+                         "style": {"hatch_type": "acad",
+                                   "hatch_pattern": "AR-RROOF"}}],
+            style={}, scale_m_per_px=0.3, origin_px=(1500, 1400),
+        )
+        doc = ezdxf.readfile(str(out))
+        hs = [h for h in doc.modelspace().query("HATCH")
+              if h.dxf.layer == "LANDTYPE_1"]
+        assert len(hs) == 9  # 3x3 grid of 1000px (=300 m) tiles
+        for h in hs:
+            assert h.dxf.pattern_name == "AR-RROOF"  # same pattern everywhere
+
+    def test_small_region_stays_single_hatch(self, tmp_path):
+        doc = _export_with_landtype(tmp_path)  # small test region
+        hs = [h for h in doc.modelspace().query("HATCH")
+              if h.dxf.layer == "LANDTYPE_1"]
+        assert len(hs) == 1
+
     def test_no_white_roof_fill(self, tmp_path):
         # Rhino renders pure-white objects BLACK on a white background, so a
         # white "mask" fill becomes a black blob swallowing the roof outline
