@@ -26,9 +26,28 @@ BBOX = dict(west=-1.0, south=-1.0, east=1.0, north=1.0)
 
 class TestFetchAndConvert:
     def test_cache_hit_skips_network(self):
-        overture_cache.put("infrastructure", (-1.0, -1.0, 1.0, 1.0),
+        overture_cache.put("infrastructure-v2", (-1.0, -1.0, 1.0, 1.0),
                            {"polygons": ["sentinel"], "lines": []})
         assert fetch_infrastructure(-1.0, -1.0, 1.0, 1.0)["polygons"] == ["sentinel"]
+
+    def test_uses_v2_cache_key(self, monkeypatch):
+        # The v1 cache key held UNFILTERED data (power lines included); the
+        # fetch must look up the bumped key so stale v1 entries never serve.
+        seen = {}
+        def fake_get(kind, bbox):
+            seen["kind"] = kind
+            return {"polygons": [], "lines": []}
+        monkeypatch.setattr(overture_cache, "get", fake_get)
+        fetch_infrastructure(-9.0, -9.0, 9.0, 9.0)
+        assert seen["kind"] == "infrastructure-v2"
+
+    def test_subtype_filter(self):
+        from app.pipeline.infrastructure import subtype_included, EXCLUDED_SUBTYPES
+        for sub in EXCLUDED_SUBTYPES:
+            assert not subtype_included(sub)
+        for sub in ("pier", "bridge", "barrier", "pedestrian", "transit",
+                    "water", "transportation", None):
+            assert subtype_included(sub)
 
     def test_pixels_split_types_and_clip(self):
         data = {
@@ -95,6 +114,26 @@ class TestExportBehavior:
         segs = [e for e in doc.modelspace().query("LWPOLYLINE")
                 if e.dxf.layer == "CONTOURS"]
         assert len(segs) == 2                        # broken at the deck
+
+    def test_roads_clipped_at_infra_boundary(self, tmp_path):
+        # A road corridor crossing a pier deck is cut where the deck covers it
+        # (user spec: the deck's surface wins, same as under buildings).
+        import ezdxf as _e
+        from shapely.geometry import LineString as LS, Polygon as P
+        deck = P([(40, -20), (60, -20), (60, 20), (40, 20)])
+        out = tmp_path / "roadclip.dxf"
+        export_dxf(
+            output_path=out, buildings=[],
+            roads=[{"line": LS([(0, 0), (100, 0)]), "width_px": 10}],
+            tree_placements=[], tree_block_curves=[[[(0, 0), (1, 0), (1, 1)]]],
+            land_types=[], style={}, scale_m_per_px=1.0, origin_px=(0, 0),
+            infrastructure={"polygons": [deck], "lines": []},
+        )
+        doc = _e.readfile(str(out))
+        road_pts = [(x, y) for e in doc.modelspace().query("LWPOLYLINE")
+                    if e.dxf.layer == "ROADS" for x, y in e.get_points("xy")]
+        assert road_pts  # road still drawn outside the deck
+        assert not any(41 < x < 59 for x, y in road_pts)  # nothing under it
 
     def test_lines_drawn_open(self, tmp_path):
         doc = _export(tmp_path, {"polygons": [],

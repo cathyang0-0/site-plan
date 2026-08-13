@@ -22,6 +22,23 @@ from app.pipeline.footprints import fetch_with_retry
 
 ATTRIBUTION = "Infrastructure © OpenStreetMap contributors, Overture Maps Foundation (ODbL)"
 
+# Subtypes excluded from the plan (user call, 2026-08-13): service networks
+# and utility clutter that read as noise at site-plan scale, not built form.
+# Everything else (pier, bridge, barrier walls/fences/kerbs, pedestrian
+# structures, transit/parking aprons, breakwaters, airport surfaces) is kept.
+EXCLUDED_SUBTYPES = frozenset({
+    "power",             # overhead lines, pylons, substation gear
+    "communication",     # comms lines/towers
+    "utility",           # service pipelines/poles
+    "manhole",           # covers
+    "waste_management",  # bins, recycling pads
+    "emergency",         # hydrants, call boxes
+})
+
+
+def subtype_included(subtype) -> bool:
+    return subtype not in EXCLUDED_SUBTYPES
+
 
 def fetch_infrastructure(west: float, south: float, east: float,
                          north: float) -> dict:
@@ -33,7 +50,9 @@ def fetch_infrastructure(west: float, south: float, east: float,
     """
     from app.pipeline import overture_cache
     bbox = (west, south, east, north)
-    cached = overture_cache.get("infrastructure", bbox)
+    # v2: cache key bumped when EXCLUDED_SUBTYPES filtering was added, so
+    # pre-filter cache entries (which contain power lines etc.) never serve.
+    cached = overture_cache.get("infrastructure-v2", bbox)
     if cached is not None:
         return cached
 
@@ -46,8 +65,11 @@ def fetch_infrastructure(west: float, south: float, east: float,
         for batch in reader:
             if batch.num_rows == 0:
                 continue
-            for wkb in batch.column("geometry").to_pylist():
-                if wkb is None:
+            subtypes = (batch.column("subtype").to_pylist()
+                        if "subtype" in batch.schema.names
+                        else [None] * batch.num_rows)
+            for wkb, subtype in zip(batch.column("geometry").to_pylist(), subtypes):
+                if wkb is None or not subtype_included(subtype):
                     continue
                 geom = shapely.from_wkb(wkb)
                 for g in (geom.geoms if hasattr(geom, "geoms") else [geom]):
@@ -59,7 +81,7 @@ def fetch_infrastructure(west: float, south: float, east: float,
         return {"polygons": polygons, "lines": lines}
 
     data = fetch_with_retry(_fetch, "infrastructure fetch")
-    overture_cache.put("infrastructure", bbox, data)
+    overture_cache.put("infrastructure-v2", bbox, data)
     return data
 
 

@@ -15,7 +15,7 @@ included by design* vs. *bug*.
 | TREES | tree symbols | DeepForest detection on aerial imagery | detection-led; not the OSM/Overture tree points |
 | LANDTYPE_* | water / vegetation / bare / paved | k-means or SegFormer on aerial + Overture `water` | Overture water (incl. ocean, lakes, buffered river centerlines) replaces and carves detected water |
 | CONTOURS | topographic contours | USGS 3DEP elevation grid | interval user-chosen; clipped under buildings and infrastructure |
-| INFRASTRUCTURE | pier decks, bridges, breakwaters, walls (all shape data) | Overture `infrastructure` | 0.30 mm — between roads and roofs; clipped by buildings; land hatches and contours clip at its boundary; point features (street furniture) excluded |
+| INFRASTRUCTURE | pier decks, bridges, breakwaters, walls, kerbs, parking aprons | Overture `infrastructure` | 0.30 mm — between roads and roofs; clipped by buildings; land hatches, contours AND roads clip at its boundary; excludes point features and subtypes power/communication/utility/manhole/waste_management/emergency (`EXCLUDED_SUBTYPES`) |
 | SCALEBAR / NOTES | annotations | generated | scale bar + ODbL attribution |
 
 ## Known NOT included (exists in source data, never fetched)
@@ -34,6 +34,9 @@ for that site and are absent from our output.
 - **Railways** — filtered out of the road fetch by design.
 - **Street furniture** (hydrants, lamps, benches, signs) — `infrastructure`
   POINT features; deliberately excluded from the infrastructure stage.
+- **Service networks** — power lines/pylons, communication lines, utility
+  pipelines, manholes, waste bins, emergency fixtures (`EXCLUDED_SUBTYPES`
+  in infrastructure.py — user call: utility clutter, not built form).
 - **Ridge lines / roof geometry beyond the outline** — no data source; was
   removed from the API contract for honesty.
 

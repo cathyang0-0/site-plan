@@ -273,6 +273,14 @@ def export_dxf(
         [g for g in (buildings_union, infra_union) if g is not None]
     ) if (buildings_union is not None or infra_union is not None) else None
 
+    # Roads are clipped at infrastructure boundaries too (user spec): a road
+    # crossing a pier deck or bridge reads as the STRUCTURE's surface, so the
+    # road corridor is cut where a deck covers it — same as under buildings.
+    if road_network is not None and infra_union is not None:
+        road_network = road_network.difference(infra_union)
+        road_network = (road_network
+                        if not road_network.is_empty else None)
+
     # Anything a land-type region should never be drawn under -- built
     # structure (buildings + infrastructure decks) and roads (pavement, not
     # ground cover). Clipped exactly, boundary-on-boundary; the outline-weight
@@ -354,7 +362,7 @@ def export_dxf(
 
     for road in zero_width_roads:
         line = road["line"]
-        segments = _clip_line(line, buildings_union) if buildings_union is not None else [line]
+        segments = _clip_line(line, structure_clip) if structure_clip is not None else [line]
         for segment in segments:
             if segment.length == 0:
                 continue
