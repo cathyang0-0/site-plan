@@ -14,7 +14,8 @@ included by design* vs. *bug*.
 | ROADS | road corridors | Overture `segment` (subtype `road`) + CV width | rail and non-road segments are filtered out |
 | TREES | tree symbols | DeepForest detection on aerial imagery | detection-led; not the OSM/Overture tree points |
 | LANDTYPE_* | water / vegetation / bare / paved | k-means or SegFormer on aerial + Overture `water` | Overture water (incl. ocean, lakes, buffered river centerlines) replaces and carves detected water |
-| CONTOURS | topographic contours | USGS 3DEP elevation grid | interval user-chosen; clipped under buildings |
+| CONTOURS | topographic contours | USGS 3DEP elevation grid | interval user-chosen; clipped under buildings and infrastructure |
+| INFRASTRUCTURE | pier decks, bridges, breakwaters, walls (all shape data) | Overture `infrastructure` | 0.30 mm — between roads and roofs; clipped by buildings; land hatches and contours clip at its boundary; point features (street furniture) excluded |
 | SCALEBAR / NOTES | annotations | generated | scale bar + ODbL attribution |
 
 ## Known NOT included (exists in source data, never fetched)
@@ -23,23 +24,16 @@ Verified live against the Santa Barbara harbor bbox (2026-08-13): all of the
 following are present in Overture's `base`/`infrastructure`/`land_use` themes
 for that site and are absent from our output.
 
-- **Piers / wharves / docks** — Overture `infrastructure`, class `pier/pier`
-  (Stearns Wharf's deck outline exists there as a named polygon; the marina
-  piers too). This is why a plan can show buildings and a road "floating" on
-  open water: their supporting pier deck is a layer we don't draw.
-- **Breakwaters / seawalls** — `infrastructure`, `water/breakwater`.
-- **Bridges** — `infrastructure`, `bridge/bridge` (decks and edges).
-- **Walls / fences / barriers** — `infrastructure`, `barrier/*`.
-- **Parking lots** — `infrastructure` `transit/parking` and `land_use`
-  polygons (paved *surface* may still appear via CV land cover, but not the
-  lot boundary as an object).
+- **Parking lots as land_use zones** — `land_use` polygons (the paved
+  *surface* may appear via CV land cover, and parking aprons mapped as
+  `infrastructure` shapes ARE included; zoning polygons are not).
 - **Land-use areas** — parks, sports pitches, marinas, residential/commercial
   zoning polygons (`land_use` theme).
 - **Overture's own land cover** (beach/scrub/rock polygons, `land` theme) —
   we detect ground cover from imagery instead.
 - **Railways** — filtered out of the road fetch by design.
-- **Power lines**, **street furniture** (hydrants, lamps, benches, signs) —
-  `infrastructure` points/lines.
+- **Street furniture** (hydrants, lamps, benches, signs) — `infrastructure`
+  POINT features; deliberately excluded from the infrastructure stage.
 - **Ridge lines / roof geometry beyond the outline** — no data source; was
   removed from the API contract for honesty.
 
@@ -48,5 +42,5 @@ for that site and are absent from our output.
 All the Overture items above use the exact fetch pattern of
 `app/pipeline/water.py` (bbox query → cache → polygons/buffered lines), so
 each is a small, self-contained stage: fetch, convert to pixels, draw on its
-own DXF layer slotted into the Z-staircase. Piers are the most plan-relevant
-candidate (coastal sites read wrong without them).
+own DXF layer slotted into the Z-staircase. Piers/bridges/walls were added exactly this way (`infrastructure.py`,
+2026-08-13).

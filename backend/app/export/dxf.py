@@ -2,8 +2,9 @@
 DXF export using ezdxf.
 
 Layer drawing order (bottom to top):
-  CONTOURS → LANDTYPE_* → ROADS → TREES → ROOFS (outline; interiors are
-  empty paper via geometric clipping — no white fill, Rhino renders white as black)
+  CONTOURS → LANDTYPE_* → ROADS → TREES → INFRASTRUCTURE → ROOFS (outlines;
+  interiors are empty paper via geometric clipping — no white fill, Rhino
+  renders white as black)
 
 All coordinates are in meters, local origin at site bounding box center.
 
@@ -28,6 +29,7 @@ from pathlib import Path
 # land hatches. Used when the caller's style dict doesn't override a value.
 DEFAULT_LINE_WEIGHT_MM = {
     "ROOFS": 0.40,
+    "INFRASTRUCTURE": 0.30,   # pier decks/bridges: above roads, below roofs
     "ROADS": 0.18,
     "TREES": 0.10,
     "LANDTYPE": 0.05,
@@ -99,6 +101,7 @@ def export_dxf(
                                      # it for Overture footprints); drawn as a
                                      # small gray note below the site
     contours: list[dict] | None = None,  # [{"points": [(x,y) px], "level": m}]
+    infrastructure: dict | None = None,  # {"polygons": [px Polygon], "lines": [px LineString]}
     units: str = "m",                # output drawing unit (see UNIT_FACTOR)
 ):
     """
@@ -211,6 +214,12 @@ def export_dxf(
             style.get("trees", {}).get("line_weight_mm", DEFAULT_LINE_WEIGHT_MM["TREES"]),
         )
         _add_layer(
+            doc, "INFRASTRUCTURE",
+            style.get("infrastructure", {}).get("color", "#000000"),
+            style.get("infrastructure", {}).get(
+                "line_weight_mm", DEFAULT_LINE_WEIGHT_MM["INFRASTRUCTURE"]),
+        )
+        _add_layer(
             doc, "ROOFS",
             style.get("roofs", {}).get("color", "#000000"),
             style.get("roofs", {}).get("line_weight_mm", DEFAULT_LINE_WEIGHT_MM["ROOFS"]),
@@ -241,13 +250,36 @@ def export_dxf(
     road_network = _build_road_network(widthed_roads, fillet_radius_px, buildings_union) if widthed_roads else None
     road_network = road_network if road_network is not None and not road_network.is_empty else None
 
-    # Anything a land-type region should never be drawn under -- buildings
-    # (masked by roof fill) and now roads (pavement, not ground cover).
-    # Clipped exactly, boundary-on-boundary; the outline-weight problem is
-    # solved by the Z staircase (LAND_HATCH_Z), not by retreating the hatch.
+    # Infrastructure (pier decks, bridges...) gets the roof treatment, one
+    # rung down: clipped BY buildings (roof wins an overlap), while land
+    # hatches and contours are clipped AT infrastructure boundaries just as
+    # they are at building footprints.
+    infra_polys, infra_lines = [], []
+    if infrastructure:
+        infra_polys = list(infrastructure.get("polygons") or [])
+        infra_lines = list(infrastructure.get("lines") or [])
+        if buildings_union is not None:
+            infra_polys = [g for p in infra_polys
+                           for g in _polygon_parts(p.difference(buildings_union))]
+            infra_lines = [g for l in infra_lines
+                           for g in _line_parts(l.difference(buildings_union))]
+    infra_union = unary_union(infra_polys) if infra_polys else None
+    infra_union = (infra_union
+                   if infra_union is not None and not infra_union.is_empty else None)
+
+    # Buildings + infrastructure decks: the "built structure" mask that both
+    # contours and land hatches must stop at.
+    structure_clip = unary_union(
+        [g for g in (buildings_union, infra_union) if g is not None]
+    ) if (buildings_union is not None or infra_union is not None) else None
+
+    # Anything a land-type region should never be drawn under -- built
+    # structure (buildings + infrastructure decks) and roads (pavement, not
+    # ground cover). Clipped exactly, boundary-on-boundary; the outline-weight
+    # problem is solved by the Z staircase (LAND_HATCH_Z), not by retreating.
     landtype_clip = unary_union(
-        [g for g in (buildings_union, road_network) if g is not None]
-    ) if (buildings_union is not None or road_network is not None) else None
+        [g for g in (structure_clip, road_network) if g is not None]
+    ) if (structure_clip is not None or road_network is not None) else None
 
     # --- Contours (the very bottom: first layer in the table, lowest Z) ---
     if contours:
@@ -259,11 +291,12 @@ def export_dxf(
             if len(c["points"]) < 2:
                 continue
             geom = LineString(c["points"])
-            # Clip out the runs crossing building footprints — roof interiors
-            # are empty paper (no white mask fill anymore), so an unclipped
-            # contour would draw straight through a building.
-            if buildings_union is not None:
-                geom = geom.difference(buildings_union)
+            # Clip out the runs crossing built structure (buildings AND
+            # infrastructure decks) — their interiors are empty paper (no
+            # white mask fill), so an unclipped contour would draw straight
+            # through them.
+            if structure_clip is not None:
+                geom = geom.difference(structure_clip)
             parts = geom.geoms if hasattr(geom, "geoms") else [geom]
             for part in parts:
                 if part.is_empty or part.geom_type != "LineString":
@@ -359,6 +392,17 @@ def export_dxf(
     # interiors are genuinely empty paper. Trees may overlap roofs by up to
     # 30% by design; that reads as canopy over the building, as in the
     # user's reference plans.
+
+    # --- Infrastructure: pier decks/bridges/walls, one rung below roofs ---
+    for poly in infra_polys:
+        msp.add_lwpolyline(poly_pts(poly), close=True,
+                           dxfattribs={"layer": "INFRASTRUCTURE"})
+        for ring in poly.interiors:
+            msp.add_lwpolyline([px_to_m(pt) for pt in ring.coords], close=True,
+                               dxfattribs={"layer": "INFRASTRUCTURE"})
+    for line in infra_lines:
+        msp.add_lwpolyline([px_to_m(pt) for pt in line.coords],
+                           dxfattribs={"layer": "INFRASTRUCTURE"})
 
     # --- Roofs: outline on top ---
     for poly in buildings:
@@ -580,6 +624,22 @@ def _hatch_safe_polygons(poly) -> list:
                         print(f"  dropping unrepairable hatch boundary "
                               f"({len(q.exterior.coords)} verts) on export")
     return out
+
+
+def _polygon_parts(geom) -> list:
+    """Polygon pieces of a (possibly Multi/collection) geometry."""
+    if geom.is_empty:
+        return []
+    geoms = geom.geoms if hasattr(geom, "geoms") else [geom]
+    return [g for g in geoms if g.geom_type == "Polygon" and not g.is_empty]
+
+
+def _line_parts(geom) -> list:
+    """LineString pieces of a (possibly Multi/collection) geometry."""
+    if geom.is_empty:
+        return []
+    geoms = geom.geoms if hasattr(geom, "geoms") else [geom]
+    return [g for g in geoms if g.geom_type == "LineString" and not g.is_empty]
 
 
 def _grid_split_polygon(poly, tile: float) -> list:

@@ -28,6 +28,7 @@ class DetectOptions(BaseModel):
     overture_buildings: bool = True
     overture_roads: bool = True
     overture_water: bool = True
+    overture_infrastructure: bool = True   # piers/bridges/walls (shape data)
     # Land-cover engine. k-means is the default; the SegFormer engine is
     # evaluation-only until the OpenEarthMap license question is resolved, so
     # clients must opt in explicitly (same posture as poc.py).
@@ -87,6 +88,9 @@ class StyleConfig(BaseModel):
     # Defaults mirror poc.py's architectural hierarchy: roofs heaviest,
     # roads secondary, trees/land texture lightest.
     roofs: LayerStyle = LayerStyle(color="#000000", line_weight_mm=0.40)
+    # Between roads and roofs in visual weight: reads as built structure
+    # (pier decks, bridges) but stays subordinate to roof outlines.
+    infrastructure: LayerStyle = LayerStyle(color="#000000", line_weight_mm=0.30)
     roads: LayerStyle = LayerStyle(color="#333333", line_weight_mm=0.18)
     trees: LayerStyle = LayerStyle(color="#555555", line_weight_mm=0.10)
     # Empty list = the pipeline's hatch-reference defaults (one entry per
@@ -97,7 +101,7 @@ class StyleConfig(BaseModel):
 
 class JobRequest(BaseModel):
     bbox: BoundingBox
-    layers: List[str] = ["roofs", "roads", "trees", "land_types", "contours"]
+    layers: List[str] = ["roofs", "roads", "trees", "land_types", "contours", "infrastructure"]
     options: DetectOptions = DetectOptions()
     style: StyleConfig = StyleConfig()
     block_calibrations: List[TreeBlockCalibration] = []

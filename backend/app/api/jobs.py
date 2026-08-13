@@ -166,6 +166,20 @@ def _run_pipeline(job: Job) -> None:
     else:
         stage("water", "skipped")
 
+    # --- Overture infrastructure (pier decks, bridges, breakwaters, walls) ---
+    infrastructure = {"polygons": [], "lines": []}
+    if "infrastructure" in layers and opts.overture_infrastructure:
+        def _infra():
+            from app.pipeline.infrastructure import (
+                fetch_infrastructure, infrastructure_to_pixels)
+            geo = fetch_infrastructure(bb.west, bb.south, bb.east, bb.north)
+            return infrastructure_to_pixels(geo, bb.west, bb.south, bb.east,
+                                            bb.north, img_w, img_h)
+        infrastructure = _overture_stage(
+            job, "infrastructure", {"polygons": [], "lines": []}, _infra)
+    else:
+        stage("infrastructure", "skipped")
+
     # --- Contours (USGS elevation; interval from the style config) ---
     contours = []
     if "contours" in layers and req.style.contours.visible:
@@ -240,13 +254,17 @@ def _run_pipeline(job: Job) -> None:
     if water_polys:
         from app.pipeline.water import ATTRIBUTION as WATER_ATTR
         attributions.append(WATER_ATTR)
+    if infrastructure["polygons"] or infrastructure["lines"]:
+        from app.pipeline.infrastructure import ATTRIBUTION as INFRA_ATTR
+        attributions.append(INFRA_ATTR)
 
     # Cache results for restyle-without-redetect, then export.
     job.geometry = {
         "buildings": buildings, "roads": roads,
         "tree_placements": tree_placements,
         "tree_blocks": [poc.default_tree_block()],
-        "land_types": land_types, "contours": contours, "scale": scale,
+        "land_types": land_types, "contours": contours,
+        "infrastructure": infrastructure, "scale": scale,
         "origin_px": (img_w // 2, img_h // 2),
         "attribution": "  ·  ".join(attributions) if attributions else None,
     }
@@ -272,6 +290,8 @@ def export_dxf_for(job: Job, style: Optional[StyleConfig]) -> Path:
                       [{"color": "#aaaaaa", "line_weight_mm": 0.05}],
         "contours": {"color": sc.contours.color,
                      "line_weight_mm": sc.contours.line_weight_mm},
+        "infrastructure": {"color": sc.infrastructure.color,
+                           "line_weight_mm": sc.infrastructure.line_weight_mm},
     }
     out = job.dir / "plan.dxf"
     export_dxf(
@@ -282,6 +302,8 @@ def export_dxf_for(job: Job, style: Optional[StyleConfig]) -> Path:
         tree_block_curves=g["tree_blocks"],
         land_types=g["land_types"],
         contours=(g.get("contours") or None) if sc.contours.visible else None,
+        infrastructure=(g.get("infrastructure") or None)
+                       if sc.infrastructure.visible else None,
         style=style_dict,
         units=sc.units,
         scale_m_per_px=g["scale"],

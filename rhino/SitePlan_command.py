@@ -64,7 +64,7 @@ def _ask_options():
                          ["Yes", "No"])
     if trees is None:
         return None, None, None
-    layers = ["roofs", "roads", "land_types", "contours"] + \
+    layers = ["roofs", "roads", "land_types", "contours", "infrastructure"] + \
              (["trees"] if trees == "Yes" else [])
     engine = rs.GetString("Land-cover engine", "kmeans", ["kmeans", "segmodel"])
     if engine is None:
