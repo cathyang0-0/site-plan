@@ -140,6 +140,15 @@ def export_dxf(
     def poly_pts(polygon):
         return [px_to_m(pt) for pt in polygon.exterior.coords]
 
+    def poly_to_drawing(geom):
+        """Shapely-level px->drawing transform (same mapping as px_to_m), so
+        hatch geometry can be precision-snapped and sanitized in the FINAL
+        coordinate space — the numbers actually written to the file."""
+        from shapely.ops import transform as _shp_transform
+        return _shp_transform(
+            lambda x, y: ((x - origin_px[0]) * upx, -(y - origin_px[1]) * upx),
+            geom)
+
     def poly_rings(polygon):
         """(exterior_pts, [hole_pts, ...]) -- a polygon's interior rings
         matter whenever it's been clipped against a building that sits
@@ -282,8 +291,8 @@ def export_dxf(
         if lt_style.get("outline_only", False):
             _draw_multipolygon_outlines(msp, polygons, poly_rings, layer_name)
         else:
-            _draw_multipolygon_hatches(msp, polygons, poly_rings, layer_name, lt_style,
-                                       u=u, tile_px=HATCH_TILE_M / scale_m_per_px)
+            _draw_multipolygon_hatches(msp, polygons, poly_to_drawing, layer_name,
+                                       lt_style, u=u, tile=HATCH_TILE_M * u)
 
     # Upper layers registered only now, so they land ABOVE every LANDTYPE_*
     # layer in the table (see the layer-order comment above).
@@ -542,7 +551,7 @@ def _hatch_safe_polygons(poly) -> list:
             return False
         return all(LineString(r.coords).is_simple for r in g.interiors)
 
-    if poly.is_valid and _rings_simple(poly):
+    if poly.geom_type == "Polygon" and poly.is_valid and _rings_simple(poly):
         return [poly]
     # make_valid (not buffer(0)) as the primary repair: buffer(0) silently
     # DROPS the negatively-wound lobe of a crossed ring; make_valid keeps
@@ -597,8 +606,17 @@ def _grid_split_polygon(poly, tile: float) -> list:
     return out
 
 
-def _draw_multipolygon_hatches(msp, mpoly, poly_rings_fn, layer_name: str, lt_style: dict,
-                               u: float = 1.0, tile_px: float | None = None):
+def _draw_multipolygon_hatches(msp, mpoly, to_drawing, layer_name: str, lt_style: dict,
+                               u: float = 1.0, tile: float | None = None):
+    """Draw a (pixel-space) MultiPolygon as pattern hatches.
+
+    `to_drawing` maps shapely geometry into final drawing coordinates; `tile`
+    is the max hatch tile size in DRAWING units. Everything geometric —
+    precision snap, simplicity sanitize, tiling — happens in drawing space,
+    because the px->drawing float transform can COLLAPSE near-coincident
+    vertices into exact self-touches (seen live: a ring simple in px space
+    grew a zero-area spike after x300 scaling, and Rhino refused the hatch).
+    Sanitizing the final coordinates checks exactly what gets written."""
     if mpoly.is_empty:
         return
     polys = list(mpoly.geoms) if hasattr(mpoly, "geoms") else [mpoly]
@@ -617,16 +635,25 @@ def _draw_multipolygon_hatches(msp, mpoly, poly_rings_fn, layer_name: str, lt_st
     # broken auto-conversion until that's wired up.
     scale = lt_style.get("hatch_scale", spacing / 25.4) * u
 
+    # Into drawing coordinates, then: repair -> precision-snap -> re-check.
+    # Repair must come FIRST (set_precision throws TopologyException on a
+    # crossed ring); the 0.01 mm snap then makes float-collapse degeneracies
+    # explicit, and the re-check repairs any pinch the snap itself created.
+    from shapely import set_precision
+    grid = 1e-5 * u  # 0.01 mm regardless of drawing unit
+    polys = [q for p in polys for q in _hatch_safe_polygons(to_drawing(p))]
+    polys = [set_precision(p, grid) for p in polys]
     # Sanitize BEFORE tiling (boolean ops on invalid geometry misbehave),
     # tile, then sanitize again (clipping can introduce fresh pinch points).
     polys = [q for p in polys for q in _hatch_safe_polygons(p)]
-    if tile_px:
+    if tile:
         polys = [piece for poly in polys
-                 for piece in _grid_split_polygon(poly, tile_px)]
+                 for piece in _grid_split_polygon(poly, tile)]
         polys = [q for p in polys for q in _hatch_safe_polygons(p)]
 
     for poly in polys:
-        exterior, holes = poly_rings_fn(poly)
+        exterior = list(poly.exterior.coords)
+        holes = [list(r.coords) for r in poly.interiors]
         # Hatch is a light, thin texture that must recede behind the roof
         # outlines: force the thinnest lineweight and an explicit light color
         # (rather than BYLAYER, which some viewers render at a heavy default).
