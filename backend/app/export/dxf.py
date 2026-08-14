@@ -250,20 +250,29 @@ def export_dxf(
     road_network = _build_road_network(widthed_roads, fillet_radius_px, buildings_union) if widthed_roads else None
     road_network = road_network if road_network is not None and not road_network.is_empty else None
 
-    # Infrastructure (pier decks, bridges...) gets the roof treatment, one
-    # rung down: clipped BY buildings (roof wins an overlap), while land
-    # hatches and contours are clipped AT infrastructure boundaries just as
-    # they are at building footprints.
-    infra_polys, infra_lines = [], []
-    if infrastructure:
-        infra_polys = list(infrastructure.get("polygons") or [])
-        infra_lines = list(infrastructure.get("lines") or [])
+    # Infrastructure (pier decks, bridges, buffered walls...) gets the roof
+    # treatment, one rung down: everything clipped BY buildings (roof wins an
+    # overlap); "micro" structures (toilets/artwork) that overlap a building
+    # are dropped outright (they ARE the building, mapped twice); and groups
+    # flagged `clip` contribute their polygons to the built-structure mask
+    # that hatches, contours and roads stop at.
+    infra_groups = dict((infrastructure or {}).get("groups") or {})
+    clip_polys = []
+    for name, grp in infra_groups.items():
+        polys = list(grp.get("polys") or [])
+        lines = list(grp.get("lines") or [])
+        if name == "micro" and buildings_union is not None:
+            polys = [p for p in polys if not p.intersects(buildings_union)]
         if buildings_union is not None:
-            infra_polys = [g for p in infra_polys
-                           for g in _polygon_parts(p.difference(buildings_union))]
-            infra_lines = [g for l in infra_lines
-                           for g in _line_parts(l.difference(buildings_union))]
-    infra_union = unary_union(infra_polys) if infra_polys else None
+            polys = [g for p in polys
+                     for g in _polygon_parts(p.difference(buildings_union))]
+            lines = [g for l in lines
+                     for g in _line_parts(l.difference(buildings_union))]
+        grp = {**grp, "polys": polys, "lines": lines}
+        infra_groups[name] = grp
+        if grp.get("clip"):
+            clip_polys.extend(polys)
+    infra_union = unary_union(clip_polys) if clip_polys else None
     infra_union = (infra_union
                    if infra_union is not None and not infra_union.is_empty else None)
 
@@ -401,16 +410,21 @@ def export_dxf(
     # 30% by design; that reads as canopy over the building, as in the
     # user's reference plans.
 
-    # --- Infrastructure: pier decks/bridges/walls, one rung below roofs ---
-    for poly in infra_polys:
-        msp.add_lwpolyline(poly_pts(poly), close=True,
-                           dxfattribs={"layer": "INFRASTRUCTURE"})
-        for ring in poly.interiors:
-            msp.add_lwpolyline([px_to_m(pt) for pt in ring.coords], close=True,
-                               dxfattribs={"layer": "INFRASTRUCTURE"})
-    for line in infra_lines:
-        msp.add_lwpolyline([px_to_m(pt) for pt in line.coords],
-                           dxfattribs={"layer": "INFRASTRUCTURE"})
+    # --- Infrastructure: one rung below roofs; per-CLASS lineweights (user
+    # spec): heavy structure 0.30, bridges/airfield at road weight, buffered
+    # breakwaters 0.13, micro 0.10, lifts 0.09, walls 0.08, kerbs hairline,
+    # fences 0.04 — entity-level overrides on the shared layer.
+    for name, grp in infra_groups.items():
+        lw = _nearest_dxf_lineweight(grp.get("weight_mm", 0.30))
+        attribs = {"layer": "INFRASTRUCTURE", "lineweight": lw}
+        for poly in grp["polys"]:
+            msp.add_lwpolyline(poly_pts(poly), close=True, dxfattribs=attribs)
+            for ring in poly.interiors:
+                msp.add_lwpolyline([px_to_m(pt) for pt in ring.coords],
+                                   close=True, dxfattribs=attribs)
+        for line in grp["lines"]:
+            msp.add_lwpolyline([px_to_m(pt) for pt in line.coords],
+                               dxfattribs=attribs)
 
     # --- Roofs: outline on top ---
     for poly in buildings:

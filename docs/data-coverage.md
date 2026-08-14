@@ -15,7 +15,7 @@ included by design* vs. *bug*.
 | TREES | tree symbols | DeepForest detection on aerial imagery | detection-led; not the OSM/Overture tree points |
 | LANDTYPE_* | water / vegetation / bare / paved | k-means or SegFormer on aerial + Overture `water` | Overture water (incl. ocean, lakes, buffered river centerlines) replaces and carves detected water |
 | CONTOURS | topographic contours | USGS 3DEP elevation grid | interval user-chosen; clipped under buildings and infrastructure |
-| INFRASTRUCTURE | pier decks, bridges, breakwaters, walls, kerbs, parking aprons | Overture `infrastructure` | 0.30 mm — between roads and roofs; clipped by buildings; land hatches, contours AND roads clip at its boundary; excludes point features and subtypes power/communication/utility/manhole/waste_management/emergency (`EXCLUDED_SUBTYPES`) |
+| INFRASTRUCTURE | piers, bridges, breakwaters, walls/fences/kerbs, parking aprons, runways, ski lifts | Overture `infrastructure` | per-CLASS treatment (user-reviewed): structure 0.30 / bridges+airfield 0.18 / breakwater 0.13 / micro 0.10 / lifts 0.09 / walls 0.08 / kerbs hairline / fences 0.04; centerline classes (bridge lines, breakwater, wall, fence, runway/taxiway) are OFFSET into real-width strips, never fat strokes; micro structures overlapping a building are dropped; heavy groups clip hatches/contours/roads, thin barriers don't; airport admin boundaries excluded |
 | SCALEBAR / NOTES | annotations | generated | scale bar + ODbL attribution |
 
 ## Known NOT included (exists in source data, never fetched)

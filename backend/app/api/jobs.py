@@ -167,7 +167,7 @@ def _run_pipeline(job: Job) -> None:
         stage("water", "skipped")
 
     # --- Overture infrastructure (pier decks, bridges, breakwaters, walls) ---
-    infrastructure = {"polygons": [], "lines": []}
+    infrastructure = {"groups": {}}
     if "infrastructure" in layers and opts.overture_infrastructure:
         def _infra():
             from app.pipeline.infrastructure import (
@@ -176,7 +176,7 @@ def _run_pipeline(job: Job) -> None:
             return infrastructure_to_pixels(geo, bb.west, bb.south, bb.east,
                                             bb.north, img_w, img_h)
         infrastructure = _overture_stage(
-            job, "infrastructure", {"polygons": [], "lines": []}, _infra)
+            job, "infrastructure", {"groups": {}}, _infra)
     else:
         stage("infrastructure", "skipped")
 
@@ -254,7 +254,7 @@ def _run_pipeline(job: Job) -> None:
     if water_polys:
         from app.pipeline.water import ATTRIBUTION as WATER_ATTR
         attributions.append(WATER_ATTR)
-    if infrastructure["polygons"] or infrastructure["lines"]:
+    if infrastructure.get("groups"):
         from app.pipeline.infrastructure import ATTRIBUTION as INFRA_ATTR
         attributions.append(INFRA_ATTR)
 
