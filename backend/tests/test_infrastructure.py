@@ -28,9 +28,46 @@ class TestClassify:
         for sub in EXCLUDED_SUBTYPES:
             assert classify(sub, "power_line", "LineString") is None
 
-    def test_pier_drawn_as_is(self):
+    def test_pier_closed_shapes_only(self):
+        # OSM maps a pier deck AND its edge lines; the lines double the
+        # deck's own outline — structure keeps closed shapes only (user spec).
         assert classify("pier", "pier", "Polygon") == ("structure", None)
-        assert classify("pier", "pier", "LineString") == ("structure", None)
+        assert classify("pier", "pier", "LineString") is None
+
+    def test_thin_groups_are_light_gray(self):
+        for g in ("micro", "lift", "wall", "kerb", "fence"):
+            assert GROUP_STYLE[g]["color"] == "#b4b4b4"
+        for g in ("structure", "bridge", "airfield", "breakwater"):
+            assert GROUP_STYLE[g]["color"] == "#000000"
+
+    def test_bridge_strip_over_mapped_deck_dropped(self):
+        # Same bridge mapped twice: deck polygon + centerline. The buffered
+        # strip must be pruned; the mapped deck stays.
+        deck = Polygon([(-0.001, -0.00005), (0.001, -0.00005),
+                        (0.001, 0.00005), (-0.001, 0.00005)])
+        data = {"features": [
+            {"subtype": "bridge", "class": "bridge", "geom": deck},
+            {"subtype": "bridge", "class": "bridge",
+             "geom": LineString([(-0.001, 0.0), (0.001, 0.0)])},
+        ]}
+        px = infrastructure_to_pixels(data, west=-0.01, south=-0.01,
+                                      east=0.01, north=0.01,
+                                      img_w=2000, img_h=2000)
+        assert len(px["groups"]["bridge"]["polys"]) == 1   # deck only
+
+    def test_bridge_over_structure_dropped(self):
+        pier = Polygon([(-0.002, -0.001), (0.002, -0.001),
+                        (0.002, 0.001), (-0.002, 0.001)])
+        data = {"features": [
+            {"subtype": "pier", "class": "pier", "geom": pier},
+            {"subtype": "bridge", "class": "bridge",
+             "geom": LineString([(-0.001, 0.0), (0.001, 0.0)])},  # on the pier
+        ]}
+        px = infrastructure_to_pixels(data, west=-0.01, south=-0.01,
+                                      east=0.01, north=0.01,
+                                      img_w=2000, img_h=2000)
+        assert "bridge" not in px["groups"] or not px["groups"]["bridge"]["polys"]
+        assert len(px["groups"]["structure"]["polys"]) == 1
 
     def test_bridge_polygon_kept_line_offset(self):
         assert classify("bridge", "bridge", "Polygon") == ("bridge", None)

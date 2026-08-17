@@ -64,16 +64,18 @@ WIDTH_M = {
 # built-structure clip mask (hatches/contours/roads stop at their boundary).
 # Thin barrier ribbons deliberately DON'T clip — a 0.15 m fence slit across a
 # road corridor or hatch would be an invisible defect generator.
+# Heavy built form is black; the thin classes are LIGHT GRAY (user spec) so
+# they read as secondary annotation next to roofs/roads.
 GROUP_STYLE = {
-    "structure":  {"weight_mm": 0.30, "clip": True},   # piers, aprons, parking...
-    "bridge":     {"weight_mm": 0.18, "clip": True},
-    "airfield":   {"weight_mm": 0.18, "clip": True},
-    "breakwater": {"weight_mm": 0.13, "clip": True},
-    "micro":      {"weight_mm": 0.10, "clip": True},   # toilets/artwork (if kept)
-    "lift":       {"weight_mm": 0.09, "clip": False},
-    "wall":       {"weight_mm": 0.08, "clip": False},
-    "kerb":       {"weight_mm": 0.05, "clip": False},  # hairline
-    "fence":      {"weight_mm": 0.04, "clip": False},
+    "structure":  {"weight_mm": 0.30, "clip": True,  "color": "#000000"},
+    "bridge":     {"weight_mm": 0.18, "clip": True,  "color": "#000000"},
+    "airfield":   {"weight_mm": 0.18, "clip": True,  "color": "#000000"},
+    "breakwater": {"weight_mm": 0.13, "clip": True,  "color": "#000000"},
+    "micro":      {"weight_mm": 0.10, "clip": True,  "color": "#b4b4b4"},
+    "lift":       {"weight_mm": 0.09, "clip": False, "color": "#b4b4b4"},
+    "wall":       {"weight_mm": 0.08, "clip": False, "color": "#b4b4b4"},
+    "kerb":       {"weight_mm": 0.05, "clip": False, "color": "#b4b4b4"},
+    "fence":      {"weight_mm": 0.04, "clip": False, "color": "#b4b4b4"},
 }
 
 _WALL_CLASSES = {"wall", "retaining_wall", "city_wall"}
@@ -112,8 +114,10 @@ def classify(subtype, cls, geom_type):
         return ("fence", None if geom_type == "Polygon" else WIDTH_M["fence"])
     if subtype == "pedestrian":
         return ("micro", None)                # small structures; overlap-culled
-    # pier, transit, transportation, towers, anything else: built structure
-    return ("structure", None)
+    # pier, transit, transportation, towers, anything else: built structure.
+    # CLOSED SHAPES ONLY (user spec): OSM often maps a pier's deck polygon AND
+    # its edge lines — drawing the lines doubles the deck's own outline.
+    return ("structure", None) if geom_type == "Polygon" else None
 
 
 def fetch_infrastructure(west: float, south: float, east: float,
@@ -182,19 +186,14 @@ def infrastructure_to_pixels(data: dict,
     def to_px(x, y):
         return ((x - west) * sx, (north - y) * sy)
 
-    groups: dict = {}
-
-    def bucket(name):
-        if name not in groups:
-            groups[name] = {**GROUP_STYLE[name], "polys": [], "lines": []}
-        return groups[name]
-
+    entries = []       # (group, px geometry part, source_was_polygon)
     for feat in data.get("features") or []:
         g = feat["geom"]
         decision = classify(feat["subtype"], feat["class"], g.geom_type)
         if decision is None:
             continue
         group, width_m = decision
+        src_poly = g.geom_type == "Polygon"
         px = transform(lambda x, y: to_px(x, y), g)
         if width_m is not None and px.geom_type == "LineString":
             # Buffer the centerline into a strip. Breakwaters get rounded
@@ -205,8 +204,44 @@ def infrastructure_to_pixels(data: dict,
         for part in (px.geoms if hasattr(px, "geoms") else [px]):
             if part.is_empty:
                 continue
-            if part.geom_type == "Polygon":
-                bucket(group)["polys"].append(part)
-            elif part.geom_type == "LineString" and part.length > 0:
-                bucket(group)["lines"].append(part)
+            if part.geom_type in ("Polygon", "LineString"):
+                entries.append((group, part, src_poly))
+
+    # De-duplicate the double-mapped bridges (user-reviewed): Overture often
+    # carries a bridge as a deck POLYGON *and* its centerline; our buffered
+    # strip then draws on top of the mapped deck. And a bridge shape sitting
+    # on a structure deck (pier) is the same span mapped twice — structure
+    # wins. Drop any bridge piece mostly covered by structure, and any
+    # buffered bridge STRIP mostly covered by a mapped deck polygon.
+    from shapely.ops import unary_union
+    structure_u = unary_union(
+        [g for grp, g, sp in entries if grp == "structure"
+         and g.geom_type == "Polygon"] or [Polygon()])
+    deck_u = unary_union(
+        [g for grp, g, sp in entries if grp == "bridge" and sp
+         and g.geom_type == "Polygon"] or [Polygon()])
+
+    def redundant_bridge(g, src_poly):
+        if g.geom_type != "Polygon" or g.area == 0:
+            return False
+        if not structure_u.is_empty and                 g.intersection(structure_u).area > 0.5 * g.area:
+            return True
+        if not src_poly and not deck_u.is_empty and                 g.intersection(deck_u).area > 0.5 * g.area:
+            return True
+        return False
+
+    groups: dict = {}
+
+    def bucket(name):
+        if name not in groups:
+            groups[name] = {**GROUP_STYLE[name], "polys": [], "lines": []}
+        return groups[name]
+
+    for group, part, src_poly in entries:
+        if group == "bridge" and redundant_bridge(part, src_poly):
+            continue
+        if part.geom_type == "Polygon":
+            bucket(group)["polys"].append(part)
+        elif part.length > 0:
+            bucket(group)["lines"].append(part)
     return {"groups": groups}

@@ -219,11 +219,10 @@ def export_dxf(
         # granularity matches their restyle-by-layer workflow anyway.
         # Registered thin -> thick so heavier classes sit higher in the table.
         from app.pipeline.infrastructure import GROUP_STYLE as _INFRA_GROUPS
-        infra_color = style.get("infrastructure", {}).get("color", "#000000")
         for _gname, _gstyle in sorted(_INFRA_GROUPS.items(),
                                       key=lambda kv: kv[1]["weight_mm"]):
-            _add_layer(doc, f"INFRA_{_gname.upper()}", infra_color,
-                       _gstyle["weight_mm"])
+            _add_layer(doc, f"INFRA_{_gname.upper()}",
+                       _gstyle.get("color", "#000000"), _gstyle["weight_mm"])
         _add_layer(
             doc, "ROOFS",
             style.get("roofs", {}).get("color", "#000000"),
