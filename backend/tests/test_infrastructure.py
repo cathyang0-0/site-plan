@@ -123,23 +123,38 @@ def _grp(name, polys=(), lines=()):
 
 
 class TestExportBehavior:
-    def test_per_class_lineweights(self, tmp_path):
+    def test_per_class_layers_carry_the_weights(self, tmp_path):
+        # Weights live at LAYER level (Rhino discards entity-level lineweight
+        # overrides on import — user-observed), one layer per class group.
         doc = _export(tmp_path, {
             "structure": _grp("structure", polys=[Polygon([(0, 0), (10, 0), (10, 10)])]),
             "wall": _grp("wall", polys=[Polygon([(20, 0), (30, 0), (30, 1)])]),
             "kerb": _grp("kerb", lines=[LineString([(40, 0), (50, 0)])]),
             "fence": _grp("fence", polys=[Polygon([(60, 0), (70, 0), (70, 1)])]),
         })
-        by_lw = {}
+        lw = {l.dxf.name: l.dxf.lineweight for l in doc.layers}
+        assert lw["INFRA_STRUCTURE"] == _nearest_dxf_lineweight(0.30)
+        assert lw["INFRA_WALL"] == _nearest_dxf_lineweight(0.08)
+        assert lw["INFRA_KERB"] == _nearest_dxf_lineweight(0.05)
+        assert lw["INFRA_FENCE"] == _nearest_dxf_lineweight(0.04)
+        # entities sit on their class layer, weight BYLAYER
         for e in doc.modelspace().query("LWPOLYLINE"):
-            if e.dxf.layer == "INFRASTRUCTURE":
-                by_lw.setdefault(e.dxf.lineweight, 0)
-                by_lw[e.dxf.lineweight] += 1
-        assert _nearest_dxf_lineweight(0.30) in by_lw   # structure
-        assert _nearest_dxf_lineweight(0.08) in by_lw   # wall
-        assert _nearest_dxf_lineweight(0.05) in by_lw   # kerb hairline
-        # fence 0.04 snaps to the thinnest real weight
-        assert _nearest_dxf_lineweight(0.04) == 5
+            if e.dxf.layer.startswith("INFRA_"):
+                assert e.dxf.lineweight == -1   # BYLAYER
+        placed = {e.dxf.layer for e in doc.modelspace().query("LWPOLYLINE")}
+        assert {"INFRA_STRUCTURE", "INFRA_WALL", "INFRA_KERB",
+                "INFRA_FENCE"} <= placed
+
+    def test_infra_layers_between_trees_and_roofs_thin_to_thick(self, tmp_path):
+        doc = _export(tmp_path, {"structure": _grp(
+            "structure", polys=[Polygon([(0, 0), (10, 0), (10, 10)])])})
+        names = [l.dxf.name for l in doc.layers]
+        infra = [n for n in names if n.startswith("INFRA_")]
+        assert infra  # registered
+        assert all(names.index("TREES") < names.index(n) < names.index("ROOFS")
+                   for n in infra)
+        weights = [doc.layers.get(n).dxf.lineweight for n in infra]
+        assert weights == sorted(weights)   # thin -> thick in table order
 
     def test_micro_overlapping_building_dropped(self, tmp_path):
         bldg = Polygon([(0, 0), (20, 0), (20, 20), (0, 20)])
@@ -149,7 +164,7 @@ class TestExportBehavior:
                       {"micro": _grp("micro", polys=[overlapping, standalone])},
                       buildings=[bldg])
         infra = [e for e in doc.modelspace().query("LWPOLYLINE")
-                 if e.dxf.layer == "INFRASTRUCTURE"]
+                 if e.dxf.layer == "INFRA_MICRO"]
         assert len(infra) == 1                       # only the standalone one
         xs = [x for x, y in infra[0].get_points("xy")]
         assert min(xs) >= 40
@@ -179,7 +194,7 @@ class TestExportBehavior:
         doc = _export(tmp_path, {"structure": _grp("structure", polys=[deck])},
                       buildings=[bldg])
         infra = [e for e in doc.modelspace().query("LWPOLYLINE")
-                 if e.dxf.layer == "INFRASTRUCTURE"]
+                 if e.dxf.layer == "INFRA_STRUCTURE"]
         assert len(infra) == 2
         xs = [x for e in infra for x, y in e.get_points("xy")]
         assert not any(41 < x < 59 for x in xs)

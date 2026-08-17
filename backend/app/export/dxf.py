@@ -2,7 +2,8 @@
 DXF export using ezdxf.
 
 Layer drawing order (bottom to top):
-  CONTOURS → LANDTYPE_* → ROADS → TREES → INFRASTRUCTURE → ROOFS (outlines;
+  CONTOURS → LANDTYPE_* → ROADS → TREES → INFRA_* (per class, thin→thick)
+  → ROOFS (outlines;
   interiors are empty paper via geometric clipping — no white fill, Rhino
   renders white as black)
 
@@ -29,7 +30,6 @@ from pathlib import Path
 # land hatches. Used when the caller's style dict doesn't override a value.
 DEFAULT_LINE_WEIGHT_MM = {
     "ROOFS": 0.40,
-    "INFRASTRUCTURE": 0.30,   # pier decks/bridges: above roads, below roofs
     "ROADS": 0.18,
     "TREES": 0.10,
     "LANDTYPE": 0.05,
@@ -213,12 +213,17 @@ def export_dxf(
             style.get("trees", {}).get("color", "#333333"),
             style.get("trees", {}).get("line_weight_mm", DEFAULT_LINE_WEIGHT_MM["TREES"]),
         )
-        _add_layer(
-            doc, "INFRASTRUCTURE",
-            style.get("infrastructure", {}).get("color", "#000000"),
-            style.get("infrastructure", {}).get(
-                "line_weight_mm", DEFAULT_LINE_WEIGHT_MM["INFRASTRUCTURE"]),
-        )
+        # One layer PER infrastructure class group, weight at LAYER level:
+        # Rhino's DXF import discards entity-level lineweight overrides (all
+        # entities displayed at the layer weight — user-observed), and layer
+        # granularity matches their restyle-by-layer workflow anyway.
+        # Registered thin -> thick so heavier classes sit higher in the table.
+        from app.pipeline.infrastructure import GROUP_STYLE as _INFRA_GROUPS
+        infra_color = style.get("infrastructure", {}).get("color", "#000000")
+        for _gname, _gstyle in sorted(_INFRA_GROUPS.items(),
+                                      key=lambda kv: kv[1]["weight_mm"]):
+            _add_layer(doc, f"INFRA_{_gname.upper()}", infra_color,
+                       _gstyle["weight_mm"])
         _add_layer(
             doc, "ROOFS",
             style.get("roofs", {}).get("color", "#000000"),
@@ -410,13 +415,12 @@ def export_dxf(
     # 30% by design; that reads as canopy over the building, as in the
     # user's reference plans.
 
-    # --- Infrastructure: one rung below roofs; per-CLASS lineweights (user
-    # spec): heavy structure 0.30, bridges/airfield at road weight, buffered
-    # breakwaters 0.13, micro 0.10, lifts 0.09, walls 0.08, kerbs hairline,
-    # fences 0.04 — entity-level overrides on the shared layer.
+    # --- Infrastructure: one rung below roofs; per-CLASS weights carried by
+    # per-class LAYERS (INFRA_WALL 0.08, INFRA_KERB hairline, ...): Rhino
+    # ignores entity-level lineweight overrides on import, layer weights
+    # survive — and per-class layers let the user restyle/toggle each class.
     for name, grp in infra_groups.items():
-        lw = _nearest_dxf_lineweight(grp.get("weight_mm", 0.30))
-        attribs = {"layer": "INFRASTRUCTURE", "lineweight": lw}
+        attribs = {"layer": f"INFRA_{name.upper()}"}
         for poly in grp["polys"]:
             msp.add_lwpolyline(poly_pts(poly), close=True, dxfattribs=attribs)
             for ring in poly.interiors:
