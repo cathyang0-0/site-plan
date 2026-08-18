@@ -75,7 +75,7 @@ class SitePlanDialog(forms.Dialog[bool]):
     {"path": dxf_path, "warnings": [...]} on success, None otherwise.
     .last_bbox always holds the last drawn bbox (for the caller's sticky)."""
 
-    def __init__(self, initial_bbox, units="m"):
+    def __init__(self, initial_bbox, units="m", last_job=None):
         super().__init__()          # REQUIRED first — see module docstring
         self.Title = "Site Plan Drafter"
         self.Padding = drawing.Padding(8)
@@ -95,6 +95,11 @@ class SitePlanDialog(forms.Dialog[bool]):
         self._job_id = None           # set when a job completes with trees
         self._final_status = None     # its poll status (for warnings)
         self._request = None          # the submitted request body
+        # {"job_id", "style"} of the newest tree-detected job. Fed back in
+        # by the command (session sticky) so the preview can be reopened
+        # WITHOUT regenerating — valid as long as the backend still holds
+        # the job (its jobs live in memory for the server's lifetime).
+        self.last_job = dict(last_job) if last_job else None
 
         self._build_options_page()
         self._build_progress_page()
@@ -162,6 +167,12 @@ class SitePlanDialog(forms.Dialog[bool]):
                                 self._contours))
         right.Add(self._labeled("River width (m)", self._river_width))
         right.Add(widths_expander)
+
+        self._last_btn = _props(forms.Button(),
+                                Text="Tree preview of last run…",
+                                Enabled=bool(self.last_job))
+        self._last_btn.Click += self._on_open_last
+        right.Add(self._last_btn)
         right.Add(None, False, True)   # spring: push buttons to the bottom
 
         self._generate_btn = _props(forms.Button(), Text="Generate")
@@ -327,9 +338,44 @@ class SitePlanDialog(forms.Dialog[bool]):
         self._job_id = job_id
         self._final_status = status
         self._import_btn.Enabled = True
+        self._last_btn.Enabled = True   # Back → options can come back here
         self._root.Content = self._preview_page
         self._preview_web.Url = System.Uri(
             "%s/api/jobs/%s/preview" % (spc.DEFAULT_BASE, job_id))
+
+    def _on_open_last(self, sender, e):
+        """Reopen the remembered job's preview — no regeneration. Verifies
+        the backend still holds the job first (network → worker thread)."""
+        if not self.last_job:
+            return
+        self._last_btn.Enabled = False
+        job = dict(self.last_job)
+
+        def check():
+            try:
+                # Immediate return for a complete job; a short timeout turns
+                # "backend restarted / job gone" into a clean error instead
+                # of a hang.
+                status = spc.poll_job(job["job_id"], timeout=10)
+            except spc.SitePlanError as exc:
+                message = str(exc)
+
+                def fail():
+                    self._last_btn.Enabled = True
+                    forms.MessageBox.Show(
+                        self, "The last run isn't available anymore "
+                        "(backend restarted?). Generate a new plan.\n\n"
+                        + message, "SitePlan")
+                self._invoke(fail)
+                return
+
+            def ok():
+                self._timer.Stop()
+                self._request = {"style": dict(job["style"])}
+                self._show_preview(job["job_id"], status)
+            self._invoke(ok)
+
+        threading.Thread(target=check, daemon=True).start()
 
     def _on_import(self, sender, e):
         """Export with the slider values (seconds — restyle, no re-detect),
@@ -471,6 +517,8 @@ class SitePlanDialog(forms.Dialog[bool]):
                                     style=request["style"])
             status = spc.poll_job(job_id, on_progress=self._on_job_progress)
             if "trees" in request["layers"]:
+                self.last_job = {"job_id": job_id,
+                                 "style": request["style"]}
                 self._invoke(lambda: self._show_preview(job_id, status))
                 return
             out = os.path.join(tempfile.mkdtemp(prefix="siteplan_"),
@@ -514,14 +562,16 @@ class SitePlanDialog(forms.Dialog[bool]):
         self._timer.Start()
 
 
-def show(initial_bbox, units="m"):
-    """Open the dialog modally. Returns (result_dict_or_None, last_bbox)."""
+def show(initial_bbox, units="m", last_job=None):
+    """Open the dialog modally.
+    Returns (result_dict_or_None, last_bbox, last_job) — the caller keeps
+    last_bbox and last_job in sc.sticky so the next run remembers them."""
     import scriptcontext as sc
-    dlg = SitePlanDialog(initial_bbox, units=units)
+    dlg = SitePlanDialog(initial_bbox, units=units, last_job=last_job)
     # Per developer.rhino3d.com/guides/eto/rhino-specific: RhinoEtoApp
     # .MainWindow "will not work correctly on Mac" — parent to the document
     # window instead (and pass the script's sc.doc, not RhinoDoc.ActiveDoc).
     parent = Rhino.UI.RhinoEtoApp.MainWindowForDocument(sc.doc)
     ok = dlg.ShowModal(parent)
     dlg._timer.Stop()
-    return (dlg.result if ok else None), dlg.last_bbox
+    return (dlg.result if ok else None), dlg.last_bbox, dlg.last_job

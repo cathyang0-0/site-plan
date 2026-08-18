@@ -32,6 +32,7 @@ for _name in ("siteplan_client", "siteplan_form", "siteplan_dialog"):
 import siteplan_dialog
 
 STICKY_KEY = "siteplan_last_bbox"
+LAST_JOB_KEY = "siteplan_last_job"   # {"job_id", "style"} of the last tree run
 DEFAULT_BBOX = "-76.5515,42.5305,-76.5415,42.5385"
 
 
@@ -51,10 +52,13 @@ def run():
     doc_units = {2: "mm", 3: "cm", 4: "m", 8: "in", 9: "ft"}.get(
         rs.UnitSystem(), "m")
 
-    result, last_bbox = siteplan_dialog.show(_sticky_bbox(), units=doc_units)
+    result, last_bbox, last_job = siteplan_dialog.show(
+        _sticky_bbox(), units=doc_units, last_job=sc.sticky.get(LAST_JOB_KEY))
 
     if last_bbox:   # remember the bbox even if the run failed/was cancelled
         sc.sticky[STICKY_KEY] = "%(west)s,%(south)s,%(east)s,%(north)s" % last_bbox
+    if last_job:    # so "Tree preview of last run" works on the next open
+        sc.sticky[LAST_JOB_KEY] = last_job
     if result is None:
         return
     path = result["path"]
