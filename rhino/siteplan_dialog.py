@@ -20,6 +20,15 @@ Threading rules (violating these freezes or crashes Rhino):
     forms.Application.Instance.Invoke(System.Action(fn)),
   - the DXF import into the document happens NOT here but in
     SitePlan_command.py, after ShowModal returns, on Rhino's main thread.
+
+Rhino 8 CPython Eto gotchas baked into this file (each cost a real run):
+  - super().__init__() must be the FIRST line of an Eto subclass __init__
+    (Python.NET skips the base ctor otherwise → NullReferenceException).
+  - Constructor property-kwargs (forms.Label(Text=...)) are NOT supported
+    by this Rhino build's Python.NET → construct bare, set properties after
+    (that's what _props() is for).
+  - Parent ShowModal to RhinoEtoApp.MainWindowForDocument(sc.doc), never
+    RhinoEtoApp.MainWindow (silently shows nothing on Mac).
 """
 import json
 import os
@@ -47,17 +56,20 @@ MAP_URL = System.Uri(
                              "siteplan_map.html"))
 
 
+def _props(ctrl, **values):
+    """Set properties post-construction (see gotcha note in the docstring)."""
+    for name, value in values.items():
+        setattr(ctrl, name, value)
+    return ctrl
+
+
 class SitePlanDialog(forms.Dialog[bool]):
     """Collects a request, runs the job, returns with .result set:
     {"path": dxf_path, "warnings": [...]} on success, None otherwise.
     .last_bbox always holds the last drawn bbox (for the caller's sticky)."""
 
     def __init__(self, initial_bbox, units="m"):
-        # REQUIRED first line: Rhino 8's Python.NET only auto-runs the Eto
-        # base constructor when __init__ matches a .NET ctor signature; with
-        # our extra args it doesn't, the platform handler stays null, and the
-        # first property set (Title) throws NullReferenceException.
-        super().__init__()
+        super().__init__()          # REQUIRED first — see module docstring
         self.Title = "Site Plan Drafter"
         self.Padding = drawing.Padding(8)
         self.Resizable = True
@@ -75,7 +87,7 @@ class SitePlanDialog(forms.Dialog[bool]):
 
         self._build_options_page()
         self._build_progress_page()
-        self._root = forms.Panel(Content=self._options_page)
+        self._root = _props(forms.Panel(), Content=self._options_page)
         self.Content = self._root
         # If the window is closed mid-run (Esc / red button), stop the client
         # wait too — otherwise the worker keeps polling a dead dialog.
@@ -94,22 +106,25 @@ class SitePlanDialog(forms.Dialog[bool]):
         self._webview.DocumentLoaded += self._on_map_loaded
         self._webview.Url = MAP_URL
 
-        self._readout = forms.Label(Text="Draw a box on the map to set the site.")
-        self._estimate = forms.Label(Text="")
-        guidance = forms.Label(
+        self._readout = _props(forms.Label(),
+                               Text="Draw a box on the map to set the site.")
+        self._estimate = _props(forms.Label(), Text="")
+        guidance = _props(
+            forms.Label(),
             Text=("Draw slightly larger than needed — edge conditions aren't "
                   "perfectly resolved.\nProcessing time grows steeply with area."),
             TextColor=drawing.Colors.Gray)
 
-        left = forms.DynamicLayout(Spacing=drawing.Size(4, 4))
+        left = _props(forms.DynamicLayout(), Spacing=drawing.Size(4, 4))
         left.Add(self._webview, True, True)
         left.Add(self._readout)
         left.Add(self._estimate)
         left.Add(guidance)
 
         # --- native controls (right column) ---
-        self._trees_check = forms.CheckBox(Text="Detect trees (the slow stage)",
-                                           Checked=True)
+        self._trees_check = _props(forms.CheckBox(),
+                                   Text="Detect trees (the slow stage)",
+                                   Checked=True)
         self._trees_check.CheckedChanged += lambda s, e: self._refresh_estimate()
 
         self._crown_slider, crown_row = self._make_slider(
@@ -121,14 +136,16 @@ class SitePlanDialog(forms.Dialog[bool]):
         self._engine.DataStore = ["kmeans", "segmodel", "off"]
         self._engine.SelectedIndex = 0
 
-        self._contours = forms.TextBox(Text="5ft")
-        self._river_width = forms.TextBox(Text=str(form.DEFAULT_RIVER_WIDTH_M))
+        self._contours = _props(forms.TextBox(), Text="5ft")
+        self._river_width = _props(forms.TextBox(),
+                                   Text=str(form.DEFAULT_RIVER_WIDTH_M))
 
         self._grid = self._make_width_grid()
-        widths_expander = forms.Expander(Header="Road widths by type (m)",
-                                         Expanded=False, Content=self._grid)
+        widths_expander = _props(forms.Expander(),
+                                 Header="Road widths by type (m)",
+                                 Expanded=False, Content=self._grid)
 
-        right = forms.DynamicLayout(Spacing=drawing.Size(4, 6))
+        right = _props(forms.DynamicLayout(), Spacing=drawing.Size(4, 6))
         right.Add(self._trees_check)
         right.Add(crown_row)
         right.Add(variance_row)
@@ -139,11 +156,11 @@ class SitePlanDialog(forms.Dialog[bool]):
         right.Add(widths_expander)
         right.Add(None, False, True)   # spring: push buttons to the bottom
 
-        self._generate_btn = forms.Button(Text="Generate")
+        self._generate_btn = _props(forms.Button(), Text="Generate")
         self._generate_btn.Click += self._on_generate
-        close_btn = forms.Button(Text="Close")
+        close_btn = _props(forms.Button(), Text="Close")
         close_btn.Click += lambda s, e: self.Close(False)
-        buttons = forms.DynamicLayout(Spacing=drawing.Size(6, 0))
+        buttons = _props(forms.DynamicLayout(), Spacing=drawing.Size(6, 0))
         buttons.BeginHorizontal()
         buttons.Add(None, True, False)
         buttons.Add(close_btn)
@@ -152,11 +169,11 @@ class SitePlanDialog(forms.Dialog[bool]):
         right.Add(buttons)
 
         # "None" is a Python keyword, so the enum member needs getattr.
-        right_scroll = forms.Scrollable(
-            Content=right, Border=getattr(forms.BorderType, "None"))
+        right_scroll = _props(forms.Scrollable(), Content=right,
+                              Border=getattr(forms.BorderType, "None"))
         right_scroll.Size = drawing.Size(360, -1)
 
-        page = forms.DynamicLayout(Spacing=drawing.Size(10, 6))
+        page = _props(forms.DynamicLayout(), Spacing=drawing.Size(10, 6))
         page.BeginHorizontal()
         page.Add(left, True, True)
         page.Add(right_scroll)
@@ -166,14 +183,14 @@ class SitePlanDialog(forms.Dialog[bool]):
 
     def _make_slider(self, title, lo, hi, start, text_fn):
         """Eto sliders are int-only; values are tenths (÷10 on read)."""
-        slider = forms.Slider(MinValue=lo, MaxValue=hi, Value=start)
-        label = forms.Label(Text=text_fn(start))
+        slider = _props(forms.Slider(), MinValue=lo, MaxValue=hi, Value=start)
+        label = _props(forms.Label(), Text=text_fn(start))
         slider.ValueChanged += (
             lambda s, e: setattr(label, "Text", text_fn(slider.Value)))
-        row = forms.DynamicLayout(Spacing=drawing.Size(4, 0))
-        row.Add(forms.Label(Text=title))
+        row = _props(forms.DynamicLayout(), Spacing=drawing.Size(4, 0))
+        row.Add(_props(forms.Label(), Text=title))
         row.BeginHorizontal()
-        row.Add(slider, True)
+        row.Add(slider, True, False)
         row.Add(label)
         row.EndHorizontal()
         return slider, row
@@ -185,8 +202,8 @@ class SitePlanDialog(forms.Dialog[bool]):
         return {0: "uniform"}.get(v, "%.1f× natural" % (v / 10.0))
 
     def _labeled(self, text, control):
-        row = forms.DynamicLayout(Spacing=drawing.Size(4, 2))
-        row.Add(forms.Label(Text=text))
+        row = _props(forms.DynamicLayout(), Spacing=drawing.Size(4, 2))
+        row.Add(_props(forms.Label(), Text=text))
         row.Add(control)
         return row
 
@@ -194,46 +211,46 @@ class SitePlanDialog(forms.Dialog[bool]):
         """Editable class→width grid. GridItem.Values round-trips edits
         without any binding machinery — the one Eto grid pattern that works
         the same on Mac and Windows Rhino."""
-        grid = forms.GridView(ShowHeader=True)
+        grid = _props(forms.GridView(), ShowHeader=True)
         grid.Size = drawing.Size(-1, 240)
-        col_cls = forms.GridColumn(HeaderText="Class",
-                                   DataCell=forms.TextBoxCell(0),
-                                   Editable=False, Width=150)
-        col_w = forms.GridColumn(HeaderText="Width (m)",
-                                 DataCell=forms.TextBoxCell(1),
-                                 Editable=True, Width=90)
-        grid.Columns.Add(col_cls)
-        grid.Columns.Add(col_w)
-        grid.DataStore = [forms.GridItem(Values=(cls, str(w)))
-                          for cls, w in form.ROAD_CLASS_DEFAULTS]
+        grid.Columns.Add(_props(forms.GridColumn(), HeaderText="Class",
+                                DataCell=forms.TextBoxCell(0),
+                                Editable=False, Width=150))
+        grid.Columns.Add(_props(forms.GridColumn(), HeaderText="Width (m)",
+                                DataCell=forms.TextBoxCell(1),
+                                Editable=True, Width=90))
+        items = []
+        for cls, width in form.ROAD_CLASS_DEFAULTS:
+            items.append(_props(forms.GridItem(), Values=[cls, str(width)]))
+        grid.DataStore = items
         return grid
 
     # ------------------------------------------------------------ progress UI
     def _build_progress_page(self):
         self._stage_labels = {}
-        rows = forms.DynamicLayout(Spacing=drawing.Size(6, 4))
-        rows.Add(forms.Label(Text="Generating site plan…",
-                             Font=drawing.SystemFonts.Bold()))
+        rows = _props(forms.DynamicLayout(), Spacing=drawing.Size(6, 4))
+        rows.Add(_props(forms.Label(), Text="Generating site plan…",
+                        Font=drawing.SystemFonts.Bold()))
         for stage in STAGES:
-            label = forms.Label(Text="    " + stage)
+            label = _props(forms.Label(), Text="    " + stage)
             self._stage_labels[stage] = label
             rows.Add(label)
-        self._elapsed = forms.Label(Text="")
-        self._error = forms.Label(Text="", TextColor=drawing.Colors.Firebrick)
-        self._error.Wrap = forms.WrapMode.Word
+        self._elapsed = _props(forms.Label(), Text="")
+        self._error = _props(forms.Label(), Text="",
+                             TextColor=drawing.Colors.Firebrick,
+                             Wrap=forms.WrapMode.Word)
 
-        bar = forms.ProgressBar(Indeterminate=True)
+        bar = _props(forms.ProgressBar(), Indeterminate=True)
 
-        self._cancel_btn = forms.Button(Text="Cancel")
+        self._cancel_btn = _props(forms.Button(), Text="Cancel")
         self._cancel_btn.Click += self._on_cancel
-        self._back_btn = forms.Button(Text="Back")
-        self._back_btn.Visible = False
+        self._back_btn = _props(forms.Button(), Text="Back", Visible=False)
         self._back_btn.Click += self._on_back
 
         rows.Add(bar)
         rows.Add(self._elapsed)
         rows.Add(self._error, True, True)
-        buttons = forms.DynamicLayout(Spacing=drawing.Size(6, 0))
+        buttons = _props(forms.DynamicLayout(), Spacing=drawing.Size(6, 0))
         buttons.BeginHorizontal()
         buttons.Add(None, True, False)
         buttons.Add(self._back_btn)

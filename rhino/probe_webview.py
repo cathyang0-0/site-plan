@@ -18,6 +18,10 @@ Interpreting results:
     and point siteplan_dialog.MAP_URL at http://localhost:8000/map.
   - "ExecuteScript ✗" → tell Claude; the bridge needs the DocumentTitle
     fallback wired instead.
+
+NOTE (learned the hard way, applies to every Eto script in this project):
+constructor property-kwargs like forms.Label(Text=...) are NOT supported by
+this Rhino build's Python.NET — construct bare, then set properties.
 """
 import os
 
@@ -25,6 +29,7 @@ import System
 import Eto.Forms as forms
 import Eto.Drawing as drawing
 import Rhino.UI
+import scriptcontext as sc
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -34,13 +39,20 @@ class Probe(forms.Dialog):
         super().__init__()   # required in Rhino 8 CPython — see siteplan_dialog.py
         self.Title = "SitePlan WebView probe"
         self.ClientSize = drawing.Size(720, 600)
+
         self.web = forms.WebView()
         self.web.Size = drawing.Size(700, 480)
         self.web.DocumentLoaded += self._loaded
-        self.out = forms.Label(Text="loading siteplan_map.html…")
-        btn = forms.Button(Text="Run bridge check (do this after tiles show)")
+
+        self.out = forms.Label()
+        self.out.Text = "loading siteplan_map.html…"
+
+        btn = forms.Button()
+        btn.Text = "Run bridge check (do this after tiles show)"
         btn.Click += self._check
-        lay = forms.DynamicLayout(Spacing=drawing.Size(6, 6))
+
+        lay = forms.DynamicLayout()
+        lay.Spacing = drawing.Size(6, 6)
         lay.Add(self.web, True, True)
         lay.Add(self.out)
         lay.Add(btn)
@@ -64,5 +76,4 @@ class Probe(forms.Dialog):
 # MainWindowForDocument, not MainWindow — the latter silently fails on Mac
 # (developer.rhino3d.com/guides/eto/rhino-specific). The dialog may open
 # BEHIND the ScriptEditor window; move the editor if you don't see it.
-import scriptcontext as sc
 Probe().ShowModal(Rhino.UI.RhinoEtoApp.MainWindowForDocument(sc.doc))
