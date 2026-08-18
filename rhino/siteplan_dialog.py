@@ -171,9 +171,10 @@ class SitePlanDialog(forms.Dialog[bool]):
         buttons.EndHorizontal()
         right.Add(buttons)
 
-        # "None" is a Python keyword, so the enum member needs getattr.
+        # BorderType.None: "None" is a Python keyword and this Python.NET
+        # exposes it neither as .None nor via getattr — parse the CLR name.
         right_scroll = _props(forms.Scrollable(), Content=right,
-                              Border=getattr(forms.BorderType, "None"))
+                              Border=System.Enum.Parse(forms.BorderType, "None"))
         right_scroll.Size = drawing.Size(360, -1)
 
         page = _props(forms.DynamicLayout(), Spacing=drawing.Size(10, 6))
