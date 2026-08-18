@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<!--
+  SitePlan bbox picker — loaded by the Eto WebView in siteplan_dialog.py.
+
+  Keyless by design: MapLibre GL (CDN), USGS imagery tiles (the SAME imagery
+  the backend pipeline fetches, so what you frame is what gets processed),
+  Nominatim for address search. No accounts, no tokens.
+
+  Bridge contract with the dialog (poll-based; see siteplan_dialog.py):
+    - Python reads state:  ExecuteScript("return window.getState()")
+      -> JSON {bbox: {west,south,east,north}|null, area_km2, seq}
+      seq increments on every bbox change; Python diffs it.
+    - Python pushes state: ExecuteScript("initFromPython({...bbox json...})")
+      on DocumentLoaded (the sticky bbox from the last run).
+
+  Develop/debug in a normal browser: open this file, draw with the button or
+  shift+drag, and call initFromPython({west:...}) from the devtools console.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SitePlan bbox picker</title>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; }
+  #map { position: absolute; inset: 0; }
+  .panel {
+    position: absolute; z-index: 5; background: rgba(255,255,255,.92);
+    border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,.3);
+    font: 13px -apple-system, "Segoe UI", sans-serif;
+  }
+  #searchbox { top: 10px; left: 10px; padding: 6px; display: flex; gap: 6px; }
+  #search { width: 230px; border: 1px solid #bbb; border-radius: 4px; padding: 4px 6px; }
+  #search-msg { color: #a33; align-self: center; max-width: 160px; }
+  #drawbtn {
+    top: 10px; right: 10px; padding: 7px 12px; cursor: pointer;
+    border: 1px solid #888; user-select: none;
+  }
+  #drawbtn.active { background: #2b6cb0; color: #fff; border-color: #2b6cb0; }
+  #readout { bottom: 10px; left: 10px; padding: 6px 10px; color: #333; }
+  .map-drawing .maplibregl-canvas { cursor: crosshair !important; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="searchbox" class="panel">
+  <input id="search" type="text" placeholder="Search address…">
+  <button id="search-go">Go</button>
+  <span id="search-msg"></span>
+</div>
+<div id="drawbtn" class="panel">Draw box</div>
+<div id="readout" class="panel">Draw a box (button or shift+drag) to set the site bbox.</div>
+
+<script>
+"use strict";
+
+// ---- state the dialog polls -------------------------------------------------
+window.__state = { bbox: null, area_km2: 0, seq: 0 };
+window.getState = function () { return JSON.stringify(window.__state); };
+
+// ---- map: single raster source, no key -------------------------------------
+const map = new maplibregl.Map({
+  container: "map",
+  style: {
+    version: 8,
+    sources: {
+      usgs: {
+        type: "raster",
+        tiles: ["https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}"],
+        tileSize: 256,
+        maxzoom: 16,
+        attribution: "Imagery: USGS The National Map",
+      },
+    },
+    layers: [{ id: "usgs", type: "raster", source: "usgs" }],
+  },
+  center: [-76.5465, 42.5345],   // Myers Point default; initFromPython overrides
+  zoom: 13,
+});
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }));
+
+// Hosts (the Eto WebView included) can settle the control's size AFTER the
+// page loads, leaving MapLibre rendering at the stale size. Nudge it.
+window.addEventListener("resize", function () { map.resize(); });
+setTimeout(function () { map.resize(); }, 300);
+
+// The bbox rectangle lives in one GeoJSON source, styled twice (fill + line).
+function bboxPolygon(b) {
+  return { type: "Feature", geometry: { type: "Polygon", coordinates: [[
+    [b.west, b.south], [b.east, b.south], [b.east, b.north],
+    [b.west, b.north], [b.west, b.south]]] } };
+}
+const EMPTY = { type: "FeatureCollection", features: [] };
+map.on("load", function () {
+  map.addSource("bbox", { type: "geojson", data: EMPTY });
+  map.addLayer({ id: "bbox-fill", type: "fill", source: "bbox",
+                 paint: { "fill-color": "#2b6cb0", "fill-opacity": 0.12 } });
+  map.addLayer({ id: "bbox-line", type: "line", source: "bbox",
+                 paint: { "line-color": "#2b6cb0", "line-width": 2 } });
+  if (pendingInit) { setBbox(pendingInit); fitTo(pendingInit); pendingInit = null; }
+});
+
+// ---- bbox state -------------------------------------------------------------
+function areaKm2(b) {
+  const midLat = (b.north + b.south) / 2 * Math.PI / 180;
+  return (b.north - b.south) * 111.32 *
+         (b.east - b.west) * 111.32 * Math.cos(midLat);
+}
+
+function setBbox(b) {
+  map.getSource("bbox").setData(bboxPolygon(b));
+  const area = areaKm2(b);
+  window.__state = { bbox: b, area_km2: area, seq: window.__state.seq + 1 };
+  document.getElementById("readout").textContent =
+    b.west.toFixed(4) + ", " + b.south.toFixed(4) + "  →  " +
+    b.east.toFixed(4) + ", " + b.north.toFixed(4) +
+    "   (" + area.toFixed(2) + " km²)";
+}
+
+function fitTo(b) {
+  map.fitBounds([[b.west, b.south], [b.east, b.north]],
+                { padding: 60, duration: 0 });
+}
+
+// Called by the dialog (DocumentLoaded) with the remembered bbox; callable
+// before the style finishes loading, hence the queue.
+let pendingInit = null;
+window.initFromPython = function (b) {
+  if (!b || !isFinite(b.west)) return;
+  if (map.loaded() && map.getSource("bbox")) { setBbox(b); fitTo(b); }
+  else pendingInit = b;
+};
+
+// ---- drag-rectangle drawing -------------------------------------------------
+// Two ways in: the "Draw box" toggle (one box per click of the button), or
+// shift+drag anytime (MapLibre's default shift+drag zoom is disabled below).
+let drawArmed = false;   // button mode
+let anchor = null;       // lngLat where the drag started
+const drawbtn = document.getElementById("drawbtn");
+
+map.boxZoom.disable();   // shift+drag belongs to us
+
+drawbtn.addEventListener("click", function () {
+  drawArmed = !drawArmed;
+  drawbtn.classList.toggle("active", drawArmed);
+  document.body.classList.toggle("map-drawing", drawArmed);
+});
+
+function cornersToBbox(a, c) {
+  return { west: Math.min(a.lng, c.lng), east: Math.max(a.lng, c.lng),
+           south: Math.min(a.lat, c.lat), north: Math.max(a.lat, c.lat) };
+}
+
+map.on("mousedown", function (e) {
+  if (!drawArmed && !e.originalEvent.shiftKey) return;
+  e.preventDefault();               // keep dragPan from panning
+  anchor = e.lngLat;
+});
+map.on("mousemove", function (e) {
+  if (anchor) setBbox(cornersToBbox(anchor, e.lngLat));
+});
+map.on("mouseup", function (e) {
+  if (!anchor) return;
+  const b = cornersToBbox(anchor, e.lngLat);
+  anchor = null;
+  if (drawArmed) drawbtn.click();   // one box per arm
+  // A click without a drag would make a zero-area sliver — ignore it.
+  if (b.east - b.west < 1e-5 || b.north - b.south < 1e-5) return;
+  setBbox(b);
+});
+
+// ---- address search (Nominatim) --------------------------------------------
+// Low volume (one request per Enter). Browsers won't let a page set
+// User-Agent; Nominatim's sanctioned alternative for identification is the
+// email query param — add "&email=you@example.com" if usage ever grows.
+const search = document.getElementById("search");
+const searchMsg = document.getElementById("search-msg");
+
+function searchAddress() {
+  if (!search.value.trim()) return;
+  searchMsg.textContent = "…";
+  fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" +
+        encodeURIComponent(search.value.trim()))
+    .then(function (r) { return r.json(); })
+    .then(function (hits) {
+      if (!hits.length) { searchMsg.textContent = "no result"; return; }
+      searchMsg.textContent = "";
+      // Fly there; the user draws the bbox themselves (deliberate — the
+      // right framing is a judgment call, see the dialog's guidance notes).
+      // maxDuration matters: flyTo's auto duration scales with screen-space
+      // distance, so a cross-country hop at zoom 15 would animate for HOURS.
+      map.flyTo({ center: [+hits[0].lon, +hits[0].lat], zoom: 15,
+                  maxDuration: 2500 });
+    })
+    .catch(function () { searchMsg.textContent = "search failed"; });
+}
+
+document.getElementById("search-go").addEventListener("click", searchAddress);
+search.addEventListener("keydown", function (ev) {
+  if (ev.key === "Enter" || ev.keyCode === 13) searchAddress();
+});
+</script>
+</body>
+</html>
