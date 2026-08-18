@@ -141,8 +141,11 @@ class SitePlanDialog(forms.Dialog[bool]):
                                    Text=str(form.DEFAULT_RIVER_WIDTH_M))
 
         self._grid = self._make_width_grid()
+        # Expander.Header is typed Control, not str — C# converts implicitly
+        # (string → Label), this Python.NET does not. Hand it a real Label.
         widths_expander = _props(forms.Expander(),
-                                 Header="Road widths by type (m)",
+                                 Header=_props(forms.Label(),
+                                               Text="Road widths by type (m)"),
                                  Expanded=False, Content=self._grid)
 
         right = _props(forms.DynamicLayout(), Spacing=drawing.Size(4, 6))
