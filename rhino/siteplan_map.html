@@ -78,7 +78,9 @@ const map = new maplibregl.Map({
   center: [-76.5465, 42.5345],   // Myers Point default; initFromPython overrides
   zoom: 13,
 });
-map.addControl(new maplibregl.NavigationControl({ showCompass: false }));
+// bottom-right, so the zoom buttons don't collide with the Draw box button
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }),
+               "bottom-right");
 
 // Hosts (the Eto WebView included) can settle the control's size AFTER the
 // page loads, leaving MapLibre rendering at the stale size. Nudge it.
