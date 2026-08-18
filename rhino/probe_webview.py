@@ -61,4 +61,8 @@ class Probe(forms.Dialog):
             self.out.Text = "ExecuteScript ✗ → " + str(exc)
 
 
-Probe().ShowModal(Rhino.UI.RhinoEtoApp.MainWindow)
+# MainWindowForDocument, not MainWindow — the latter silently fails on Mac
+# (developer.rhino3d.com/guides/eto/rhino-specific). The dialog may open
+# BEHIND the ScriptEditor window; move the editor if you don't see it.
+import scriptcontext as sc
+Probe().ShowModal(Rhino.UI.RhinoEtoApp.MainWindowForDocument(sc.doc))

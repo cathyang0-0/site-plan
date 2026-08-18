@@ -77,6 +77,9 @@ class SitePlanDialog(forms.Dialog[bool]):
         self._build_progress_page()
         self._root = forms.Panel(Content=self._options_page)
         self.Content = self._root
+        # If the window is closed mid-run (Esc / red button), stop the client
+        # wait too — otherwise the worker keeps polling a dead dialog.
+        self.Closed += lambda s, e: self._cancel.set()
 
         # Poll the map's state twice a second (see bridge note in docstring).
         self._timer = forms.UITimer()
@@ -392,7 +395,12 @@ class SitePlanDialog(forms.Dialog[bool]):
 
 def show(initial_bbox, units="m"):
     """Open the dialog modally. Returns (result_dict_or_None, last_bbox)."""
+    import scriptcontext as sc
     dlg = SitePlanDialog(initial_bbox, units=units)
-    ok = dlg.ShowModal(Rhino.UI.RhinoEtoApp.MainWindow)
+    # Per developer.rhino3d.com/guides/eto/rhino-specific: RhinoEtoApp
+    # .MainWindow "will not work correctly on Mac" — parent to the document
+    # window instead (and pass the script's sc.doc, not RhinoDoc.ActiveDoc).
+    parent = Rhino.UI.RhinoEtoApp.MainWindowForDocument(sc.doc)
+    ok = dlg.ShowModal(parent)
     dlg._timer.Stop()
     return (dlg.result if ok else None), dlg.last_bbox
