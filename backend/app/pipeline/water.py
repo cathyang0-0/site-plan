@@ -15,13 +15,32 @@ ATTRIBUTION = "Water © OpenStreetMap contributors, Overture Maps Foundation (OD
 DEFAULT_RIVER_WIDTH_M = 5.0
 _M_PER_DEG_LAT = 111_320   # meters per degree latitude (near-constant on Earth)
 
-def fetch_water_footprints(west: float, south: float, east: float, north: float) -> list[Polygon]:
+def fetch_water_footprints(west: float, south: float, east: float, north: float,
+                           river_width_m: float = DEFAULT_RIVER_WIDTH_M) -> list[Polygon]:
     """
     Fetch water footprint polygons for a lon/lat bounding box, return in EPSG:4326 lon/lat coordinates.
+
+    River/stream centerlines are buffered into strips `river_width_m` wide.
+    The cache stores RAW Overture geometries (kind "water_raw"), and buffering
+    happens after retrieval — so a different width on the same bbox re-buffers
+    instead of silently returning strips built at the old width. (The old
+    "water" cache kind stored pre-buffered polygons; the new kind avoids
+    reading those stale entries.)
     """
+    geoms = _fetch_water_raw(west, south, east, north)
+    half_width_deg = (river_width_m / 2) / _M_PER_DEG_LAT
+    polygons: list[Polygon] = []
+    for geom in geoms:
+        polygons.extend(_water_polygons_from_geom(geom, half_width_deg))
+    return polygons
+
+
+def _fetch_water_raw(west: float, south: float, east: float, north: float) -> list:
+    """Raw Overture water geometries for a bbox (polygons AND centerlines),
+    cached un-buffered so callers can buffer at any width."""
     from app.pipeline import overture_cache
     bbox = (west, south, east, north)
-    cached = overture_cache.get("water", bbox)
+    cached = overture_cache.get("water_raw", bbox)
     if cached is not None:
         return cached
 
@@ -29,21 +48,19 @@ def fetch_water_footprints(west: float, south: float, east: float, north: float)
         from overturemaps import core
 
         reader = core.record_batch_reader("water", (west, south, east, north))
-        half_width_deg = (DEFAULT_RIVER_WIDTH_M / 2) / _M_PER_DEG_LAT
-        polygons: list[Polygon] = []
+        geoms = []
         for batch in reader:
             if batch.num_rows == 0:
                 continue
             for wkb in batch.column("geometry").to_pylist():
                 if wkb is None:
                     continue
-                geom = shapely.from_wkb(wkb)
-                polygons.extend(_water_polygons_from_geom(geom, half_width_deg))
-        return polygons
+                geoms.append(shapely.from_wkb(wkb))
+        return geoms
 
-    polygons = fetch_with_retry(_fetch, "water footprints fetch")
-    overture_cache.put("water", bbox, polygons)
-    return polygons
+    geoms = fetch_with_retry(_fetch, "water footprints fetch")
+    overture_cache.put("water_raw", bbox, geoms)
+    return geoms
 
 
 def _water_polygons_from_geom(geom, half_width_deg: float) -> list[Polygon]:

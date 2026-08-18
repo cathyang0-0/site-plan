@@ -41,6 +41,20 @@ class TestDetectOptions:
         assert o.paved_min_conf is None
         assert o.crown_size_scale == 1.0
         assert o.stand_fill is True
+        assert o.road_class_widths is None      # None = CLASS_WIDTH_M defaults
+        assert o.river_width_m is None          # None = DEFAULT_RIVER_WIDTH_M
+
+    def test_width_overrides_parse(self):
+        o = DetectOptions(road_class_widths={"residential": 8.0, "footway": 2.5},
+                          river_width_m=3.0)
+        assert o.road_class_widths["residential"] == 8.0
+        assert o.river_width_m == 3.0
+
+    def test_nonpositive_river_width_rejected(self):
+        with pytest.raises(Exception):
+            DetectOptions(river_width_m=0)
+        with pytest.raises(Exception):
+            DetectOptions(river_width_m=-2)
 
     def test_segmodel_opt_in(self):
         o = DetectOptions(land_types_engine="segmodel", paved_min_conf=0.6)

@@ -74,9 +74,14 @@ class TestCache:
     def test_fetch_uses_cache_without_network(self):
         # Prime the cache, then fetch — if it touched the network/overturemaps
         # at all it would fail (nothing is mocked); the cache short-circuits.
+        # The water cache stores RAW geometries ("water_raw") so river strips
+        # can be re-buffered at any width; an areal polygon passes through.
+        from shapely.geometry import Polygon
         from app.pipeline.water import fetch_water_footprints
-        overture_cache.put("water", (-1.0, -1.0, 1.0, 1.0), ["sentinel"])
-        assert fetch_water_footprints(-1.0, -1.0, 1.0, 1.0) == ["sentinel"]
+        lake = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
+        overture_cache.put("water_raw", (-1.0, -1.0, 1.0, 1.0), [lake])
+        [out] = fetch_water_footprints(-1.0, -1.0, 1.0, 1.0)
+        assert out.equals(lake)
 
 
 class TestAuthoritativeWater:

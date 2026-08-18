@@ -144,16 +144,22 @@ def assign_widths(
     image,
     scale_m_per_px: float,
     cv_informed: bool = True,
+    class_widths: dict | None = None,
 ) -> list[dict]:
     """
     Give each pixel-space road a width_px: a class prior, optionally nudged
     by a CV pavement measurement. Returns export-ready
     {"line": LineString(px), "width_px": float, "class": str} dicts.
+
+    `class_widths` overrides CLASS_WIDTH_M per class (meters). An override
+    replaces the *prior* only — the CV measurement still nudges/clamps around
+    it, so the user sets the anchor and the image refines it.
     """
+    widths = {**CLASS_WIDTH_M, **(class_widths or {})}
     img_np = np.asarray(image.convert("RGB")) if cv_informed else None
     out = []
     for road in roads_px:
-        prior_px = CLASS_WIDTH_M.get(road["class"], DEFAULT_WIDTH_M) / scale_m_per_px
+        prior_px = widths.get(road["class"], DEFAULT_WIDTH_M) / scale_m_per_px
         if cv_informed:
             measured_px, confidence = measure_road_width_px(img_np, road["line"], prior_px)
             width_px = blend_width(prior_px, measured_px, confidence)
@@ -251,6 +257,7 @@ def build_roads(
     west: float, south: float, east: float, north: float,
     scale_m_per_px: float,
     cv_informed: bool = True,
+    class_widths: dict | None = None,
 ) -> list[dict]:
     """
     Full open-data road pipeline: fetch Overture centerlines for the bbox,
@@ -260,7 +267,8 @@ def build_roads(
     img_w, img_h = image.size
     geo_roads = fetch_road_network(west, south, east, north)
     roads_px = roads_to_pixels(geo_roads, west, south, east, north, img_w, img_h)
-    return assign_widths(roads_px, image, scale_m_per_px, cv_informed=cv_informed)
+    return assign_widths(roads_px, image, scale_m_per_px, cv_informed=cv_informed,
+                         class_widths=class_widths)
 
 
 def detect_roads_cv(image) -> list[dict]:

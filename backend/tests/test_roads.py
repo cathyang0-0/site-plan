@@ -52,6 +52,43 @@ class TestClassWidthPrior:
         assert out[0]["width_px"] == pytest.approx(roads.DEFAULT_WIDTH_M)
 
 
+class TestClassWidthOverrides:
+    """User-supplied per-class widths (the plugin's road-width grid)."""
+
+    def _roads(self, cls="residential"):
+        return [{"line": LineString([(0, 0), (100, 0)]), "class": cls}]
+
+    def test_override_respected(self):
+        out = roads.assign_widths(self._roads(), image=None, scale_m_per_px=0.5,
+                                  cv_informed=False,
+                                  class_widths={"residential": 12.0})
+        assert out[0]["width_px"] == pytest.approx(12.0 / 0.5)
+
+    def test_unoverridden_class_keeps_table_default(self):
+        out = roads.assign_widths(self._roads("service"), image=None,
+                                  scale_m_per_px=1.0, cv_informed=False,
+                                  class_widths={"residential": 12.0})
+        assert out[0]["width_px"] == pytest.approx(roads.CLASS_WIDTH_M["service"])
+
+    def test_unknown_override_key_ignored(self):
+        out = roads.assign_widths(self._roads(), image=None, scale_m_per_px=1.0,
+                                  cv_informed=False,
+                                  class_widths={"hoverlane": 99.0})
+        assert out[0]["width_px"] == pytest.approx(
+            roads.CLASS_WIDTH_M["residential"])
+
+    def test_override_acts_as_prior_under_cv(self, monkeypatch):
+        # With CV on but the measurement unusable, the blended width falls
+        # back to the *override* prior — the user's anchor, not the table's.
+        from PIL import Image
+        monkeypatch.setattr(roads, "measure_road_width_px",
+                            lambda img, line, prior: (None, 0.0))
+        out = roads.assign_widths(self._roads(), image=Image.new("RGB", (120, 20)),
+                                  scale_m_per_px=1.0, cv_informed=True,
+                                  class_widths={"residential": 12.0})
+        assert out[0]["width_px"] == pytest.approx(12.0)
+
+
 class TestBlendWidth:
     def test_low_confidence_falls_back_to_prior(self):
         assert roads.blend_width(10.0, 30.0, confidence=0.1) == 10.0

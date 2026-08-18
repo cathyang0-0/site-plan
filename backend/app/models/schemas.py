@@ -9,8 +9,8 @@ trees, the hatch-reference export styling. Fields for never-built features
 removed — the contract must not promise what the kitchen can't cook. Contours
 are included ahead of the stage being built (USGS elevation; user-requested).
 """
-from pydantic import BaseModel
-from typing import Optional, List, Literal
+from pydantic import BaseModel, Field
+from typing import Optional, Dict, List, Literal
 
 
 class BoundingBox(BaseModel):
@@ -34,6 +34,13 @@ class DetectOptions(BaseModel):
     # clients must opt in explicitly (same posture as poc.py).
     land_types_engine: Literal["kmeans", "segmodel"] = "kmeans"
     paved_min_conf: Optional[float] = None   # None = engine default
+    # Road/river widths (meters). road_class_widths overrides the per-class
+    # prior (roads.CLASS_WIDTH_M) for the classes given; missing keys keep the
+    # defaults, unknown keys are ignored. The override sets the *prior* — the
+    # CV pavement measurement still nudges it. river_width_m buffers Overture
+    # river/stream centerlines (water.DEFAULT_RIVER_WIDTH_M when None).
+    road_class_widths: Optional[Dict[str, float]] = None
+    river_width_m: Optional[float] = Field(default=None, gt=0)
     # Trees (DeepForest).
     crown_size_scale: float = 1.0
     size_variance: Optional[float] = None    # None = pipeline default

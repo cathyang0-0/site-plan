@@ -74,7 +74,38 @@ class TestModuleContract:
         assert "OpenStreetMap" in ATTRIBUTION
 
     def test_fetch_is_callable_with_bbox_signature(self):
-        # Guard the public contract (4 lon/lat floats) without hitting network.
+        # Guard the public contract (4 lon/lat floats + optional river width)
+        # without hitting network.
         import inspect
         params = list(inspect.signature(fetch_water_footprints).parameters)
-        assert params == ["west", "south", "east", "north"]
+        assert params == ["west", "south", "east", "north", "river_width_m"]
+
+
+class TestRiverWidthRebuffering:
+    """The cache stores RAW geometries; buffering happens per call. This is
+    the regression guard for the old trap: pre-buffered polygons in the cache
+    silently ignoring a new river width."""
+
+    def _with_cached_line(self, monkeypatch):
+        from app.pipeline import overture_cache
+        line = LineString([(0, 0.2), (0, 0.8)])
+        monkeypatch.setattr(
+            overture_cache, "get",
+            lambda kind, bbox: [line] if kind == "water_raw" else None)
+        monkeypatch.setattr(overture_cache, "put",
+                            lambda *a, **k: pytest.fail("should hit the cache"))
+
+    def test_same_cache_different_widths_gives_different_strips(self, monkeypatch):
+        self._with_cached_line(monkeypatch)
+        narrow = fetch_water_footprints(0, 0, 1, 1, river_width_m=5.0)
+        wide = fetch_water_footprints(0, 0, 1, 1, river_width_m=10.0)
+        w_narrow = narrow[0].bounds[2] - narrow[0].bounds[0]
+        w_wide = wide[0].bounds[2] - wide[0].bounds[0]
+        assert w_wide == pytest.approx(2 * w_narrow, rel=0.05)
+
+    def test_default_width_matches_module_default(self, monkeypatch):
+        self._with_cached_line(monkeypatch)
+        out = fetch_water_footprints(0, 0, 1, 1)
+        width_deg = out[0].bounds[2] - out[0].bounds[0]
+        assert width_deg == pytest.approx(
+            DEFAULT_RIVER_WIDTH_M / _M_PER_DEG_LAT, rel=0.05)

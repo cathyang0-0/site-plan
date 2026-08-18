@@ -92,6 +92,24 @@ class TestValidation:
         assert res.status_code == 422
         assert "export limit" in res.json()["detail"]
 
+    def test_width_overrides_accepted(self, monkeypatch):
+        # The plugin's road/river width settings ride through validation.
+        monkeypatch.setattr(jobs, "_run_pipeline", _fake_ok)
+        res = client.post("/api/jobs", json={
+            "bbox": BBOX,
+            "options": {"road_class_widths": {"residential": 12.0},
+                        "river_width_m": 8.0},
+        })
+        assert res.status_code == 200
+        job = jobs.get_job(res.json()["job_id"])
+        assert job.request.options.road_class_widths == {"residential": 12.0}
+        assert job.request.options.river_width_m == 8.0
+
+    def test_zero_river_width_rejected(self):
+        res = client.post("/api/jobs", json={
+            "bbox": BBOX, "options": {"river_width_m": 0}})
+        assert res.status_code == 422
+
     def test_bad_engine_rejected_by_schema(self):
         res = client.post("/api/jobs", json={
             "bbox": BBOX, "options": {"land_types_engine": "magic"}})

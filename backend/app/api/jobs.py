@@ -131,7 +131,8 @@ def _run_pipeline(job: Job) -> None:
     if "roads" in layers and opts.overture_roads:
         def _roads():
             from app.pipeline.roads import build_roads
-            return build_roads(image, bb.west, bb.south, bb.east, bb.north, scale)
+            return build_roads(image, bb.west, bb.south, bb.east, bb.north, scale,
+                               class_widths=opts.road_class_widths)
         roads = _overture_stage(job, "roads", [], _roads)
     else:
         stage("roads", "skipped")
@@ -154,7 +155,10 @@ def _run_pipeline(job: Job) -> None:
             from shapely.ops import unary_union
             from app.pipeline.water import fetch_water_footprints
             from app.pipeline.footprints import footprints_to_pixels
-            geo = fetch_water_footprints(bb.west, bb.south, bb.east, bb.north)
+            geo = fetch_water_footprints(
+                bb.west, bb.south, bb.east, bb.north,
+                **({"river_width_m": opts.river_width_m}
+                   if opts.river_width_m is not None else {}))
             water_px = footprints_to_pixels(geo, bb.west, bb.south, bb.east,
                                             bb.north, img_w, img_h)
             if not water_px:
