@@ -15,7 +15,6 @@ search, sliders, road widths, live progress). This file keeps only what MUST
 run on Rhino's main thread with the document: sticky handling, the DXF
 import, and the report.
 """
-import importlib
 import os
 import sys
 
@@ -23,15 +22,14 @@ import rhinoscriptsyntax as rs
 import scriptcontext as sc
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import siteplan_client
-import siteplan_form
-import siteplan_dialog
 
 # ScriptEditor caches imported modules for the whole Rhino session — without
 # this, edits to the siteplan_* files silently don't apply on re-run.
-# (Order matters: dialog last, so its imports pick up the reloaded modules.)
-for _mod in (siteplan_client, siteplan_form, siteplan_dialog):
-    importlib.reload(_mod)
+# importlib.reload proved unreliable here; evicting from sys.modules before
+# the import forces a genuinely fresh read from disk.
+for _name in ("siteplan_client", "siteplan_form", "siteplan_dialog"):
+    sys.modules.pop(_name, None)
+import siteplan_dialog
 
 STICKY_KEY = "siteplan_last_bbox"
 DEFAULT_BBOX = "-76.5515,42.5305,-76.5415,42.5385"
