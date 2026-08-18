@@ -23,7 +23,17 @@ Open-data (Overture) beat CV decisively for buildings and roads; land cover stay
 **Myers Point / Cayuga Lake, NY** (lakeside, exercises water). Demo output:
 `test_data/output/*.dxf`.
 
-## Plugin front end (2026-08-18) — BUILT, needs first in-Rhino run
+## Plugin front end (2026-08-18) — WORKING in Rhino (user-verified)
+Post-verification additions: a **live tree preview** page after detection
+(aerial + crowns as circles; size/variance sliders re-render instantly;
+detection runs neutral, sizes are an export-time transform via
+`TreeStyle`/`rescale_placements` — WYSIWYG import), and a **"Tree preview of
+last run"** button (job remembered in sc.sticky, valid for the backend
+process's lifetime). Rhino 8 CPython Eto quirks hit during bring-up are
+documented at the top of `rhino/siteplan_dialog.py` — read them before
+touching Eto code.
+
+## Original build notes (2026-08-18)
 The Rhino command now opens an **Eto dialog**: embedded map (keyless MapLibre +
 USGS tiles + Nominatim search, `rhino/siteplan_map.html`) for drawing the bbox,
 native controls for trees/sliders/engine/contours + per-class **road widths and
