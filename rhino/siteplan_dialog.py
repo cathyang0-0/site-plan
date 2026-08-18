@@ -53,6 +53,11 @@ class SitePlanDialog(forms.Dialog[bool]):
     .last_bbox always holds the last drawn bbox (for the caller's sticky)."""
 
     def __init__(self, initial_bbox, units="m"):
+        # REQUIRED first line: Rhino 8's Python.NET only auto-runs the Eto
+        # base constructor when __init__ matches a .NET ctor signature; with
+        # our extra args it doesn't, the platform handler stays null, and the
+        # first property set (Title) throws NullReferenceException.
+        super().__init__()
         self.Title = "Site Plan Drafter"
         self.Padding = drawing.Padding(8)
         self.Resizable = True

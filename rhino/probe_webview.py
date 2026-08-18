@@ -31,6 +31,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 class Probe(forms.Dialog):
     def __init__(self):
+        super().__init__()   # required in Rhino 8 CPython — see siteplan_dialog.py
         self.Title = "SitePlan WebView probe"
         self.ClientSize = drawing.Size(720, 600)
         self.web = forms.WebView()
