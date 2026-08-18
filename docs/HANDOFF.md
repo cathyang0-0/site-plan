@@ -1,6 +1,6 @@
 # Site Plan Drafter — session handoff
 
-Snapshot for a fresh session. Full design is in [`spec.md`](../spec.md); this is
+Snapshot for a fresh session. Full design is in [`spec.md`](spec.md); this is
 "where things actually stand and what will bite you."
 
 ## What this is
@@ -23,11 +23,25 @@ Open-data (Overture) beat CV decisively for buildings and roads; land cover stay
 **Myers Point / Cayuga Lake, NY** (lakeside, exercises water). Demo output:
 `test_data/output/*.dxf`.
 
+## Plugin front end (2026-08-18) — BUILT, needs first in-Rhino run
+The Rhino command now opens an **Eto dialog**: embedded map (keyless MapLibre +
+USGS tiles + Nominatim search, `rhino/siteplan_map.html`) for drawing the bbox,
+native controls for trees/sliders/engine/contours + per-class **road widths and
+river width** (new `DetectOptions.road_class_widths` / `river_width_m` — the
+water cache now stores RAW geoms, kind `water_raw`, so widths re-buffer), and a
+per-stage progress page. See `rhino/README.md`; run `rhino/probe_webview.py`
+once in Rhino first (verifies tile CORS from file:// + the ExecuteScript
+bridge; fallback documented in its docstring). Bridge = UITimer polling
+`window.getState()` — do NOT switch to DocumentTitleChanged (flaky on Mac).
+
 ## Not built yet
-- **Frontend** — `frontend/src/components/{MapPicker,Preview,StylePanel}.jsx` are stubs (TODOs).
-- **API / job layer** — `app/api/routes.py` is stubbed; Celery/Redis not wired.
-- **Land-cover semantic-seg model** — scoped, not integrated (see below).
-- **Manual tree edits** (plot/paint-fill/erase) and **size sliders** — spec'd (§6 Step 4.5); `crown_size_scale`/`size_variance` exist in the backend, the UI does not.
+- **Web frontend** — `frontend/src/components/*.jsx` are still stubs; the plugin
+  dialog covers the primary flow. Web-only wants: style panel, tree-block upload.
+- **Celery/Redis** — not wired (in-process job threads in `app/api/jobs.py` are
+  fine for solo/local use).
+- **Land-cover semantic-seg model** — integrated behind `land_types_engine=
+  "segmodel"`, license question still open (see below).
+- **Manual tree edits** (plot/paint-fill/erase) — spec'd (§6 Step 4.5), no UI.
 - Land-type polish: <50 m² region merge, per-class morphology.
 
 ## How to run
