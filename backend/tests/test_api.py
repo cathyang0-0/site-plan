@@ -105,6 +105,51 @@ class TestValidation:
         assert job.request.options.road_class_widths == {"residential": 12.0}
         assert job.request.options.river_width_m == 8.0
 
+    def test_tree_preview_endpoints(self, monkeypatch):
+        # Fake a completed job carrying geometry + a site image, then walk
+        # the three preview endpoints the Rhino dialog uses.
+        def _fake_with_trees(job):
+            job.progress["imagery"] = "done"
+            (job.dir / "site.png").write_bytes(b"\x89PNG fake")
+            job.dxf_path = job.dir / "plan.dxf"
+            job.dxf_path.write_text("fake dxf")
+            job.geometry = {
+                "tree_placements": [
+                    {"block_idx": 0, "position": (10.0, 20.0), "scale": 1.0,
+                     "rotation": 0.0},
+                    {"block_idx": 0, "position": (30.0, 40.0), "scale": 2.0,
+                     "rotation": 0.0},
+                ],
+                "tree_mean_scale": 1.5, "img_size": (800, 600), "scale": 0.3,
+            }
+        monkeypatch.setattr(jobs, "_run_pipeline", _fake_with_trees)
+        res = client.post("/api/jobs", json={"bbox": BBOX})
+        job_id = res.json()["job_id"]
+        _wait(job_id)
+
+        img = client.get(f"/api/jobs/{job_id}/image")
+        assert img.status_code == 200
+        assert img.headers["content-type"] == "image/png"
+
+        trees = client.get(f"/api/jobs/{job_id}/trees").json()
+        assert len(trees["placements"]) == 2
+        assert trees["placements"][1]["r"] == pytest.approx(2.0 * 20.0)
+        assert trees["mean_r"] == pytest.approx(1.5 * 20.0)
+        assert trees["min_r"] == pytest.approx(1.5 / 0.3)
+        assert (trees["img_w"], trees["img_h"]) == (800, 600)
+
+        page = client.get(f"/api/jobs/{job_id}/preview")
+        assert page.status_code == 200
+        assert "getState" in page.text or "setParams" in page.text
+
+    def test_preview_endpoints_409_before_complete(self, monkeypatch):
+        monkeypatch.setattr(jobs, "_run_pipeline",
+                            lambda job: time.sleep(30))
+        res = client.post("/api/jobs", json={"bbox": BBOX})
+        job_id = res.json()["job_id"]
+        for path in ("image", "trees", "preview"):
+            assert client.get(f"/api/jobs/{job_id}/{path}").status_code == 409
+
     def test_zero_river_width_rejected(self):
         res = client.post("/api/jobs", json={
             "bbox": BBOX, "options": {"river_width_m": 0}})

@@ -68,7 +68,7 @@ def estimate_minutes(area_km2, trees_on):
 
 
 def build_request(bbox, trees=True, land_engine="kmeans",
-                  contour_interval_m=None, crown_size_scale=1.5,
+                  contour_interval_m=None, crown_size_scale=None,
                   size_variance=None, road_class_widths=None,
                   river_width_m=None, units="m"):
     """Assemble the POST /api/jobs body from dialog values.
@@ -79,13 +79,18 @@ def build_request(bbox, trees=True, land_engine="kmeans",
     - land_engine "off" drops the "land_types" layer; otherwise it names
       the engine ("kmeans" | "segmodel").
     - contour_interval_m None drops the "contours" layer.
-    - size_variance/river_width_m None are OMITTED so the backend defaults
-      apply (same contract as poc.py's optional flags).
+    - crown_size_scale/size_variance None are OMITTED → detection runs
+      NEUTRAL. That's the dialog's path since the preview: sizes are chosen
+      on the preview page and applied at export (export_style below), so
+      one detection serves every slider position.
+    - river_width_m None is omitted so the backend default applies.
     """
     layers = ["roofs", "roads", "land_types", "contours", "infrastructure"]
     if trees:
         layers.append("trees")
-    options = {"crown_size_scale": crown_size_scale}
+    options = {}
+    if crown_size_scale is not None:
+        options["crown_size_scale"] = crown_size_scale
 
     if land_engine == "off":
         layers.remove("land_types")
@@ -107,3 +112,15 @@ def build_request(bbox, trees=True, land_engine="kmeans",
 
     return {"bbox": dict(bbox), "layers": layers,
             "options": options, "style": style}
+
+
+def export_style(request, crown_size_scale, size_variance):
+    """Style body for POST /jobs/{id}/export after the preview: the
+    original request's style (units, contours — they must survive the
+    re-render) plus the preview sliders as EXPORT-TIME tree sizes.
+    The backend re-applies the size transform to its cached neutral
+    placements, so the DXF matches the preview exactly."""
+    style = dict(request["style"])
+    style["trees"] = {"crown_size_scale": crown_size_scale,
+                      "size_variance": size_variance}
+    return style

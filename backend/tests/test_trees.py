@@ -4,12 +4,14 @@ from shapely.geometry import Polygon
 
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.pipeline.trees import (
     filter_placements,
     fill_dense_stands,
     apply_size_transform,
+    rescale_placements,
     MIN_CANOPY_RADIUS_M,
 )
 
@@ -260,3 +262,42 @@ class TestSuppressOverWater:
         from app.pipeline.trees import suppress_over_water
         from shapely.geometry import Polygon
         assert suppress_over_water([], [Polygon([(0, 0), (1, 0), (1, 1)])]) == []
+
+
+class TestRescalePlacements:
+    """Export-time twin of apply_size_transform (the preview sliders)."""
+
+    def _pl(self, *scales):
+        return [{"block_idx": 0, "position": (i, i), "scale": s,
+                 "rotation": 0.0} for i, s in enumerate(scales)]
+
+    def test_neutral_is_identity_above_floor(self):
+        out = rescale_placements(self._pl(1.0, 2.0), mean_scale=1.5,
+                                 crown_size_scale=1.0, size_variance=1.0,
+                                 min_scale=0.1)
+        assert [p["scale"] for p in out] == [1.0, 2.0]
+
+    def test_variance_zero_collapses_to_mean(self):
+        out = rescale_placements(self._pl(1.0, 2.0), mean_scale=1.5,
+                                 crown_size_scale=1.0, size_variance=0.0,
+                                 min_scale=0.1)
+        assert [p["scale"] for p in out] == [1.5, 1.5]
+
+    def test_crown_scale_multiplies(self):
+        out = rescale_placements(self._pl(1.0, 2.0), mean_scale=1.5,
+                                 crown_size_scale=2.0, size_variance=1.0,
+                                 min_scale=0.1)
+        assert [p["scale"] for p in out] == [2.0, 4.0]
+
+    def test_floor_applies_before_crown_scale(self):
+        # matches apply_size_transform's order: variance → floor → average
+        out = rescale_placements(self._pl(0.2), mean_scale=1.0,
+                                 crown_size_scale=2.0, size_variance=2.0,
+                                 min_scale=0.5)
+        # variance: 1.0 + 2*(0.2-1.0) = -0.6 → floored to 0.5 → ×2 = 1.0
+        assert out[0]["scale"] == pytest.approx(1.0)
+
+    def test_cache_not_mutated(self):
+        src = self._pl(1.0)
+        rescale_placements(src, 1.0, 3.0, 0.5, 0.1)
+        assert src[0]["scale"] == 1.0   # baseline stays neutral

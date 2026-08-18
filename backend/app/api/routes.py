@@ -5,6 +5,7 @@ The submit → poll → export shape exists because detection takes minutes:
 POST /jobs returns a ticket immediately, GET /jobs/{id} is the ticket check,
 and export re-renders the cached geometry with new styling in seconds.
 """
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, UploadFile, File, HTTPException
@@ -58,6 +59,44 @@ async def export_job(job_id: str, style: Optional[StyleConfig] = None):
         raise HTTPException(status_code=500, detail="export file missing")
     return FileResponse(path, media_type="application/dxf",
                         filename="site-plan.dxf")
+
+
+def _completed_job(job_id: str):
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"no such job: {job_id}")
+    if job.status != "complete":
+        raise HTTPException(status_code=409,
+                            detail=f"job is {job.status}, not complete")
+    return job
+
+
+@router.get("/jobs/{job_id}/image")
+async def job_image(job_id: str):
+    """The fetched aerial for this job — backdrop of the tree preview."""
+    job = _completed_job(job_id)
+    path = job.dir / "site.png"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="site image not saved")
+    return FileResponse(path, media_type="image/png")
+
+
+@router.get("/jobs/{job_id}/trees")
+async def job_trees(job_id: str):
+    """Neutral-size tree placements + the constants the preview's live
+    resize math needs (see jobs.tree_preview_payload)."""
+    return jobs.tree_preview_payload(_completed_job(job_id))
+
+
+@router.get("/jobs/{job_id}/preview")
+async def job_preview(job_id: str):
+    """The tree-preview page itself. Served from the backend (not file://)
+    so its image/trees fetches are same-origin — no CORS involved."""
+    _completed_job(job_id)
+    page = Path(__file__).resolve().parents[3] / "rhino" / "siteplan_preview.html"
+    if not page.exists():
+        raise HTTPException(status_code=500, detail="preview page missing")
+    return FileResponse(page, media_type="text/html")
 
 
 @router.post("/blocks/parse")

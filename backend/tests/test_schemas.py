@@ -56,6 +56,31 @@ class TestDetectOptions:
         with pytest.raises(Exception):
             DetectOptions(river_width_m=-2)
 
+
+class TestTreeStyle:
+    def test_default_no_resize(self):
+        from app.models.schemas import StyleConfig
+        sc = StyleConfig()
+        assert sc.trees.crown_size_scale is None   # None = as detected
+        assert sc.trees.size_variance is None
+        assert sc.trees.line_weight_mm == 0.10     # layer style preserved
+
+    def test_export_time_sizes_parse(self):
+        from app.models.schemas import StyleConfig
+        sc = StyleConfig(trees={"crown_size_scale": 1.5, "size_variance": 0.5})
+        assert sc.trees.crown_size_scale == 1.5
+        assert sc.trees.size_variance == 0.5
+        # posting only the sizes must not lose the tree layer's look
+        assert sc.trees.color == "#555555"
+        assert sc.trees.line_weight_mm == 0.10
+
+    def test_invalid_sizes_rejected(self):
+        from app.models.schemas import TreeStyle
+        with pytest.raises(Exception):
+            TreeStyle(crown_size_scale=0)
+        with pytest.raises(Exception):
+            TreeStyle(size_variance=-1)
+
     def test_segmodel_opt_in(self):
         o = DetectOptions(land_types_engine="segmodel", paved_min_conf=0.6)
         assert o.land_types_engine == "segmodel"

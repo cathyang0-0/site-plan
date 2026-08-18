@@ -16,14 +16,22 @@ Rhino document at real-world scale.
      the pipeline processes. Draw slightly larger than needed (edge
      conditions aren't perfectly resolved); the time estimate updates as
      you draw — it grows steeply with area.
-   - **Options (right):** trees on/off + crown size/variance sliders,
-     land-cover engine (kmeans / segmodel / off), contour interval
-     ("5ft" or meters, 0 = none), river width, and per-class road widths
-     under the expander (values are the *prior* — the CV pavement
-     measurement still refines each road).
+   - **Options (right):** trees on/off, land-cover engine
+     (kmeans / segmodel / off), contour interval ("5ft" or meters,
+     0 = none), river width, and per-class road widths under the expander
+     (values are the *prior* — the CV pavement measurement still refines
+     each road).
    - **Generate** shows per-stage progress (Cancel stops the wait; the
-     backend job finishes and its fetches stay cached). When done, the plan
-     imports itself and zooms to it.
+     backend job finishes and its fetches stay cached).
+   - **Tree preview** (when trees are on): after detection, the dialog
+     shows your site's aerial with every detected crown drawn as a circle.
+     The size and variance sliders live here and re-render the circles
+     instantly — detection ran once with neutral sizes, and the sliders
+     are an export-time transform, so **Import draws exactly what you
+     see** (in seconds, no re-detection). Caveat: dense-stand fill
+     density was decided at detection, so extreme sizes can differ
+     slightly from a fresh run at that size.
+   - **Import** brings the plan into the active document and zooms to it.
 
 The bbox is remembered between runs. The DXF is written natively in the
 document's unit, so geometry AND hatch spacings import true.

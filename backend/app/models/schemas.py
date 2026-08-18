@@ -73,6 +73,24 @@ class LandTypeStyle(LayerStyle):
     outline_only: bool = False       # skip hatch entity, draw boundary only
 
 
+class TreeStyle(LayerStyle):
+    """Tree layer style + EXPORT-TIME size controls.
+
+    When set, crown_size_scale / size_variance re-apply the §6 size
+    transform to the job's cached neutral-size placements at export — the
+    live-preview path: detect once, restyle sizes in seconds. None = render
+    placements as detected. (Assumes detection ran with neutral sizes; if a
+    client also baked sizes via DetectOptions, the two compound.)
+
+    The layer defaults live HERE (not at the StyleConfig field) so a client
+    posting only the size fields keeps the tree layer's intended look
+    instead of silently falling back to LayerStyle's black/0.25."""
+    color: str = "#555555"
+    line_weight_mm: float = 0.10
+    crown_size_scale: Optional[float] = Field(default=None, gt=0)
+    size_variance: Optional[float] = Field(default=None, ge=0)
+
+
 class ContourStyle(LayerStyle):
     """Topographic contours (stage pending: USGS elevation data).
     User spec: as close to hairline as DXF allows, bottom-most in draw order —
@@ -99,7 +117,7 @@ class StyleConfig(BaseModel):
     # (pier decks, bridges) but stays subordinate to roof outlines.
     infrastructure: LayerStyle = LayerStyle(color="#000000", line_weight_mm=0.30)
     roads: LayerStyle = LayerStyle(color="#333333", line_weight_mm=0.18)
-    trees: LayerStyle = LayerStyle(color="#555555", line_weight_mm=0.10)
+    trees: TreeStyle = TreeStyle()
     # Empty list = the pipeline's hatch-reference defaults (one entry per
     # detected label, in label order, when overriding).
     land_types: List[LandTypeStyle] = []

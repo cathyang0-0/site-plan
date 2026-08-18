@@ -196,6 +196,36 @@ def apply_size_transform(
     return detections
 
 
+def rescale_placements(placements: list[dict], mean_scale: float,
+                       crown_size_scale: float, size_variance: float,
+                       min_scale: float) -> list[dict]:
+    """
+    Re-apply the §6 size transform to already-exported block placements.
+
+    This is the export-time twin of apply_size_transform: detection runs
+    once with NEUTRAL sizes (1.0/1.0) and caches placements; the client's
+    preview sliders then re-render sizes in seconds without re-detecting.
+    Same math, same order (variance → floor → average):
+        s'' = crown_size_scale * max(mean + v*(s - mean), min_scale)
+
+    All values are in block-scale units (radius_px / block radius) — the
+    transform is linear, so units divide out. `mean_scale` must be the mean
+    of the NEUTRAL non-stand detections (cached by the job as
+    tree_mean_scale), matching apply_size_transform's mean; `min_scale` is
+    MIN_CANOPY_RADIUS_M converted by the caller.
+
+    Positions/rotations untouched; returns new dicts (the cache stays
+    neutral so the transform is always applied from the same baseline,
+    never compounded).
+    """
+    out = []
+    for p in placements:
+        s_prime = mean_scale + size_variance * (p["scale"] - mean_scale)
+        s_final = crown_size_scale * max(s_prime, min_scale)
+        out.append({**p, "scale": s_final})
+    return out
+
+
 def fill_dense_stands(
     detections: list[dict],
     scale_m_per_px: float,

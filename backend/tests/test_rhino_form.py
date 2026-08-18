@@ -61,10 +61,12 @@ class TestBuildRequest:
         assert set(req["layers"]) == {"roofs", "roads", "land_types",
                                       "contours", "infrastructure", "trees"}
         assert req["options"]["land_types_engine"] == "kmeans"
-        assert req["options"]["crown_size_scale"] == 1.5
         assert req["style"]["contours"]["interval_m"] == pytest.approx(1.524)
         assert req["style"]["units"] == "m"
-        # None-valued optionals are omitted, not sent as null.
+        # None-valued optionals are omitted, not sent as null. Tree sizes
+        # especially: omission = NEUTRAL detection, sized at export instead
+        # (the preview contract).
+        assert "crown_size_scale" not in req["options"]
         assert "size_variance" not in req["options"]
         assert "river_width_m" not in req["options"]
 
@@ -91,6 +93,20 @@ class TestBuildRequest:
         # full table sent, not a diff
         assert len(req["options"]["road_class_widths"]) == len(form.ROAD_CLASS_DEFAULTS)
         assert req["options"]["river_width_m"] == 8.0
+
+    def test_export_style_carries_units_and_tree_sizes(self):
+        req = form.build_request(self.BBOX, contour_interval_m=1.524,
+                                 units="mm")
+        style = form.export_style(req, crown_size_scale=1.5,
+                                  size_variance=0.5)
+        assert style["units"] == "mm"                       # survives re-render
+        assert style["contours"]["interval_m"] == pytest.approx(1.524)
+        assert style["trees"] == {"crown_size_scale": 1.5,
+                                  "size_variance": 0.5}
+        # and it validates against the real API contract
+        from app.models.schemas import StyleConfig
+        parsed = StyleConfig(**style)
+        assert parsed.trees.crown_size_scale == 1.5
 
     def test_matches_backend_schema(self):
         # The assembled body must validate against the real API contract.

@@ -1,9 +1,16 @@
 """
 SitePlan — the Eto options dialog (Rhino 8, Mac + Windows).
 
-One window, two pages swapped in place:
+One window, three pages swapped in place:
   options page   map (WebView on siteplan_map.html) + native controls
   progress page  per-stage status while the job runs, with Cancel
+  preview page   the site aerial with detected tree crowns as live circles
+                 (WebView on /api/jobs/{id}/preview, served by the backend)
+                 + the size/variance sliders — moved here from the options
+                 page so they adjust REAL detected trees in real time.
+                 Detection runs once with neutral sizes; the sliders are an
+                 export-time transform (backend rescale_placements), so
+                 Import renders exactly what the preview shows.
 
 Division of labor (deliberate — keep it when editing):
   siteplan_map.html   everything map: tiles, drawing, address search.
@@ -85,8 +92,13 @@ class SitePlanDialog(forms.Dialog[bool]):
         self._cancel = threading.Event()
         self._started = None          # time.time() when the job starts
 
+        self._job_id = None           # set when a job completes with trees
+        self._final_status = None     # its poll status (for warnings)
+        self._request = None          # the submitted request body
+
         self._build_options_page()
         self._build_progress_page()
+        self._build_preview_page()
         self._root = _props(forms.Panel(), Content=self._options_page)
         self.Content = self._root
         # If the window is closed mid-run (Esc / red button), stop the client
@@ -127,11 +139,6 @@ class SitePlanDialog(forms.Dialog[bool]):
                                    Checked=True)
         self._trees_check.CheckedChanged += lambda s, e: self._refresh_estimate()
 
-        self._crown_slider, crown_row = self._make_slider(
-            "Tree size (crown scale)", 5, 30, 15, self._crown_label_text)
-        self._variance_slider, variance_row = self._make_slider(
-            "Tree size variance", 0, 20, 10, self._variance_label_text)
-
         self._engine = forms.DropDown()
         self._engine.DataStore = ["kmeans", "segmodel", "off"]
         self._engine.SelectedIndex = 0
@@ -150,8 +157,6 @@ class SitePlanDialog(forms.Dialog[bool]):
 
         right = _props(forms.DynamicLayout(), Spacing=drawing.Size(4, 6))
         right.Add(self._trees_check)
-        right.Add(crown_row)
-        right.Add(variance_row)
         right.Add(self._labeled("Land-cover engine", self._engine))
         right.Add(self._labeled('Contour interval ("5ft" or meters, 0 = off)',
                                 self._contours))
@@ -263,6 +268,96 @@ class SitePlanDialog(forms.Dialog[bool]):
         rows.Add(buttons)
         self._progress_page = rows
 
+    # ------------------------------------------------------------ preview UI
+    def _build_preview_page(self):
+        self._preview_web = forms.WebView()
+        self._preview_web.Size = drawing.Size(760, 520)
+        self._preview_web.DocumentLoaded += (
+            lambda s, e: self._push_preview_params())
+
+        self._crown_slider, crown_row = self._make_slider(
+            "Tree size (crown scale)", 5, 30, 15, self._crown_label_text)
+        self._variance_slider, variance_row = self._make_slider(
+            "Tree size variance", 0, 20, 10, self._variance_label_text)
+        self._crown_slider.ValueChanged += (
+            lambda s, e: self._push_preview_params())
+        self._variance_slider.ValueChanged += (
+            lambda s, e: self._push_preview_params())
+
+        hint = _props(forms.Label(),
+                      Text=("Circles are the detected trees on your site — "
+                            "sliders re-render them instantly, and Import "
+                            "draws exactly what you see."),
+                      TextColor=drawing.Colors.Gray)
+
+        self._import_btn = _props(forms.Button(), Text="Import into Rhino")
+        self._import_btn.Click += self._on_import
+        preview_back = _props(forms.Button(), Text="Back")
+        preview_back.Click += self._on_back
+
+        controls = _props(forms.DynamicLayout(), Spacing=drawing.Size(10, 4))
+        controls.BeginHorizontal()
+        controls.Add(crown_row, True, False)
+        controls.Add(variance_row, True, False)
+        controls.EndHorizontal()
+
+        buttons = _props(forms.DynamicLayout(), Spacing=drawing.Size(6, 0))
+        buttons.BeginHorizontal()
+        buttons.Add(hint, True, False)
+        buttons.Add(preview_back)
+        buttons.Add(self._import_btn)
+        buttons.EndHorizontal()
+
+        page = _props(forms.DynamicLayout(), Spacing=drawing.Size(6, 6))
+        page.Add(self._preview_web, True, True)
+        page.Add(controls)
+        page.Add(buttons)
+        self._preview_page = page
+
+    def _push_preview_params(self):
+        try:
+            self._preview_web.ExecuteScript(
+                "setParams(%s, %s)" % (self._crown_slider.Value / 10.0,
+                                       self._variance_slider.Value / 10.0))
+        except Exception:
+            pass   # page still loading; DocumentLoaded will push again
+
+    def _show_preview(self, job_id, status):
+        """UI thread. Job finished with trees — open the live preview."""
+        self._job_id = job_id
+        self._final_status = status
+        self._import_btn.Enabled = True
+        self._root.Content = self._preview_page
+        self._preview_web.Url = System.Uri(
+            "%s/api/jobs/%s/preview" % (spc.DEFAULT_BASE, job_id))
+
+    def _on_import(self, sender, e):
+        """Export with the slider values (seconds — restyle, no re-detect),
+        then close; SitePlan_command imports the file on the main thread."""
+        self._import_btn.Enabled = False
+        style = form.export_style(self._request,
+                                  self._crown_slider.Value / 10.0,
+                                  self._variance_slider.Value / 10.0)
+        threading.Thread(target=self._export_worker, args=(style,),
+                         daemon=True).start()
+
+    def _export_worker(self, style):
+        try:
+            out = os.path.join(tempfile.mkdtemp(prefix="siteplan_"),
+                               "site-plan.dxf")
+            path = spc.export_dxf(self._job_id, out, style=style)
+            self.result = {"path": path,
+                           "warnings": (self._final_status or {}).get("warnings")
+                           or []}
+            self._invoke(lambda: self.Close(True))
+        except spc.SitePlanError as exc:
+            message = str(exc)
+
+            def report():
+                self._import_btn.Enabled = True
+                forms.MessageBox.Show(self, message, "SitePlan")
+            self._invoke(report)
+
     # ---------------------------------------------------------- map bridge
     def _on_map_loaded(self, sender, e):
         if self._initial_bbox:
@@ -335,17 +430,18 @@ class SitePlanDialog(forms.Dialog[bool]):
             return
 
         engine = str(self._engine.SelectedValue)
+        # No tree sizes here: detection runs NEUTRAL, sizes are chosen on
+        # the preview page and applied at export (see module docstring).
         request = form.build_request(
             self._bbox,
             trees=self._trees_check.Checked is True,
             land_engine=engine,
             contour_interval_m=form.parse_interval(self._contours.Text),
-            crown_size_scale=self._crown_slider.Value / 10.0,
-            size_variance=self._variance_slider.Value / 10.0,
             road_class_widths=road_widths,
             river_width_m=river,
             units=self._units,
         )
+        self._request = request
 
         self._timer.Stop()
         self._cancel.clear()
@@ -366,13 +462,17 @@ class SitePlanDialog(forms.Dialog[bool]):
         forms.Application.Instance.Invoke(System.Action(fn))
 
     def _worker(self, request):
-        """Runs on a daemon thread: the whole submit → poll → export chain.
+        """Runs on a daemon thread: submit → poll, then either the tree
+        preview (trees on) or straight export → close (trees off).
         Touches widgets only through _invoke."""
         try:
             job_id = spc.submit_job(request["bbox"], layers=request["layers"],
                                     options=request["options"],
                                     style=request["style"])
             status = spc.poll_job(job_id, on_progress=self._on_job_progress)
+            if "trees" in request["layers"]:
+                self._invoke(lambda: self._show_preview(job_id, status))
+                return
             out = os.path.join(tempfile.mkdtemp(prefix="siteplan_"),
                                "site-plan.dxf")
             path = spc.export_dxf(job_id, out)

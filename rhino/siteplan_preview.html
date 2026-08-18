@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<!--
+  SitePlan tree preview — served by the backend at /api/jobs/{id}/preview
+  (same-origin, so the image/trees fetches below need no CORS), shown in the
+  dialog's preview page after a job completes.
+
+  The dialog owns the sliders (native Eto) and pushes values here via
+  ExecuteScript("setParams(scale, variance)"); this page just redraws.
+  The resize math MIRRORS backend rescale_placements() exactly — what you
+  see is what an export with the same slider values renders:
+      r'' = scale * max(mean_r + variance*(r - mean_r), min_r)
+
+  Debug in a normal browser: open http://localhost:8000/api/jobs/<id>/preview
+  for any completed job and call setParams(2, 0.5) from the console.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SitePlan tree preview</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #1e1e1e; }
+  #wrap { display: flex; align-items: center; justify-content: center;
+          height: 100%; }
+  canvas { max-width: 100%; max-height: 100%; }
+  #status {
+    position: absolute; top: 8px; left: 8px; padding: 4px 10px;
+    background: rgba(255,255,255,.92); border-radius: 5px;
+    font: 13px -apple-system, "Segoe UI", sans-serif; color: #333;
+  }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="canvas"></canvas></div>
+<div id="status">loading preview…</div>
+
+<script>
+"use strict";
+
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const status = document.getElementById("status");
+
+let img = null;        // the site aerial
+let data = null;       // {placements, mean_r, min_r, img_w, img_h}
+let params = { scale: 1.0, variance: 1.0 };
+
+// Same math as backend rescale_placements(): variance → floor → average.
+function finalRadius(r) {
+  const spread = data.mean_r + params.variance * (r - data.mean_r);
+  return params.scale * Math.max(spread, data.min_r);
+}
+
+function draw() {
+  if (!img || !data) return;
+  ctx.drawImage(img, 0, 0);
+  ctx.lineWidth = Math.max(1.5, data.mean_r * 0.06);
+  ctx.strokeStyle = "rgba(20, 60, 20, 0.9)";
+  ctx.fillStyle = "rgba(40, 120, 40, 0.18)";
+  for (const p of data.placements) {
+    const r = finalRadius(p.r);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.stroke();
+  }
+  status.textContent = data.placements.length + " trees  ·  size " +
+    params.scale.toFixed(1) + "×  ·  variance " + params.variance.toFixed(1) + "×";
+}
+
+// Called by the dialog whenever a slider moves.
+window.setParams = function (scale, variance) {
+  params = { scale: scale, variance: variance };
+  draw();
+};
+
+// Relative URLs: /api/jobs/{id}/preview → "image" and "trees" siblings.
+Promise.all([
+  new Promise(function (resolve, reject) {
+    const i = new Image();
+    i.onload = function () { resolve(i); };
+    i.onerror = reject;
+    i.src = "image";
+  }),
+  fetch("trees").then(function (r) { return r.json(); }),
+]).then(function (results) {
+  img = results[0];
+  data = results[1];
+  canvas.width = data.img_w || img.width;
+  canvas.height = data.img_h || img.height;
+  draw();
+}).catch(function (e) {
+  status.textContent = "preview failed to load: " + e;
+});
+</script>
+</body>
+</html>

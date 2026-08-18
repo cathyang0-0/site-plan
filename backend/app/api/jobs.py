@@ -117,6 +117,8 @@ def _run_pipeline(job: Job) -> None:
     image, scale = fetch_aerial_usgs(bb.west, bb.south, bb.east, bb.north,
                                      opts.scale_m_per_px)
     img_w, img_h = image.size
+    # Saved for the client-side tree preview (GET /jobs/{id}/image).
+    image.save(job.dir / "site.png")
     stage("imagery", "done")
 
     poc = _poc()
@@ -262,10 +264,21 @@ def _run_pipeline(job: Job) -> None:
         from app.pipeline.infrastructure import ATTRIBUTION as INFRA_ATTR
         attributions.append(INFRA_ATTR)
 
+    # Mean neutral crown size (non-stand singles — apply_size_transform's
+    # mean), cached so export can re-apply the size transform (rescale_
+    # placements) from the same baseline the detection math used.
+    tree_mean_scale = None
+    singles = [d for d in detections if not d.get("stand")]
+    if singles:
+        tree_mean_scale = (sum(d["radius_px"] for d in singles)
+                           / len(singles) / poc.DEFAULT_BLOCK_RADIUS_PX)
+
     # Cache results for restyle-without-redetect, then export.
     job.geometry = {
         "buildings": buildings, "roads": roads,
         "tree_placements": tree_placements,
+        "tree_mean_scale": tree_mean_scale,
+        "img_size": (img_w, img_h),
         "tree_blocks": [poc.default_tree_block()],
         "land_types": land_types, "contours": contours,
         "infrastructure": infrastructure, "scale": scale,
@@ -277,6 +290,24 @@ def _run_pipeline(job: Job) -> None:
     stage("export", "done")
 
 
+def tree_preview_payload(job: Job) -> dict:
+    """Everything the client-side tree preview needs, in image-pixel units.
+    The JS mirrors rescale_placements' math over these values, so its
+    circles are exactly what an export with the same sliders will render."""
+    g = job.geometry
+    from app.pipeline.trees import MIN_CANOPY_RADIUS_M
+    block_r = _poc().DEFAULT_BLOCK_RADIUS_PX
+    img_w, img_h = g.get("img_size") or (0, 0)
+    return {
+        "placements": [{"x": p["position"][0], "y": p["position"][1],
+                        "r": p["scale"] * block_r}
+                       for p in g["tree_placements"]],
+        "mean_r": (g.get("tree_mean_scale") or 0) * block_r,
+        "min_r": MIN_CANOPY_RADIUS_M / g["scale"],
+        "img_w": img_w, "img_h": img_h,
+    }
+
+
 def export_dxf_for(job: Job, style: Optional[StyleConfig]) -> Path:
     """Render the job's cached geometry to DXF with the given style. Fast
     (seconds) — this is what lets clients restyle without re-detecting."""
@@ -285,6 +316,21 @@ def export_dxf_for(job: Job, style: Optional[StyleConfig]) -> Path:
     from app.export.dxf import export_dxf
     sc = style or StyleConfig()
     g = job.geometry
+
+    # Export-time tree sizing (the preview sliders): re-apply the size
+    # transform to the cached NEUTRAL placements. Never mutate the cache —
+    # every export transforms from the same baseline.
+    tree_placements = g["tree_placements"]
+    wants_resize = (getattr(sc.trees, "crown_size_scale", None) is not None
+                    or getattr(sc.trees, "size_variance", None) is not None)
+    if tree_placements and wants_resize and g.get("tree_mean_scale"):
+        from app.pipeline.trees import rescale_placements, MIN_CANOPY_RADIUS_M
+        block_r = _poc().DEFAULT_BLOCK_RADIUS_PX
+        tree_placements = rescale_placements(
+            tree_placements, g["tree_mean_scale"],
+            sc.trees.crown_size_scale or 1.0,
+            sc.trees.size_variance if sc.trees.size_variance is not None else 1.0,
+            (MIN_CANOPY_RADIUS_M / g["scale"]) / block_r)
     style_dict = {
         "roofs": {"color": sc.roofs.color, "line_weight_mm": sc.roofs.line_weight_mm},
         "roads": {"color": sc.roads.color, "line_weight_mm": sc.roads.line_weight_mm},
@@ -302,7 +348,7 @@ def export_dxf_for(job: Job, style: Optional[StyleConfig]) -> Path:
         output_path=out,
         buildings=g["buildings"] if sc.roofs.visible else [],
         roads=g["roads"] if sc.roads.visible else [],
-        tree_placements=g["tree_placements"] if sc.trees.visible else [],
+        tree_placements=tree_placements if sc.trees.visible else [],
         tree_block_curves=g["tree_blocks"],
         land_types=g["land_types"],
         contours=(g.get("contours") or None) if sc.contours.visible else None,
