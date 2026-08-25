@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.pipeline.trees import (
+from siteplan_backend.pipeline.trees import (
     filter_placements,
     fill_dense_stands,
     apply_size_transform,
@@ -246,7 +246,7 @@ class TestApplySizeTransform:
 
 class TestSuppressOverWater:
     def test_tree_in_water_removed(self):
-        from app.pipeline.trees import suppress_over_water
+        from siteplan_backend.pipeline.trees import suppress_over_water
         from shapely.geometry import Polygon
         water = Polygon([(0, 0), (100, 0), (100, 100), (0, 100)])
         dets = [_det(50, 50, 5), _det(500, 500, 5)]  # first inside water
@@ -254,12 +254,12 @@ class TestSuppressOverWater:
         assert len(out) == 1 and out[0]["x_px"] == 500
 
     def test_no_water_is_noop(self):
-        from app.pipeline.trees import suppress_over_water
+        from siteplan_backend.pipeline.trees import suppress_over_water
         dets = [_det(50, 50, 5)]
         assert suppress_over_water(dets, []) == dets
 
     def test_empty_detections(self):
-        from app.pipeline.trees import suppress_over_water
+        from siteplan_backend.pipeline.trees import suppress_over_water
         from shapely.geometry import Polygon
         assert suppress_over_water([], [Polygon([(0, 0), (1, 0), (1, 1)])]) == []
 

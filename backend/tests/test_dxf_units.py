@@ -11,7 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from shapely.geometry import Polygon, MultiPolygon
-from app.export.dxf import (
+from siteplan_backend.export.dxf import (
     export_dxf, UNIT_FACTOR, UNIT_INSUNITS,
     LAND_HATCH_Z, CONTOUR_Z, _scale_pattern_definition,
 )

@@ -6,7 +6,7 @@ from shapely.geometry import Polygon
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.pipeline.footprints import footprints_to_pixels
+from siteplan_backend.pipeline.footprints import footprints_to_pixels
 
 BBOX = dict(west=-98.4720, south=29.4820, east=-98.4640, north=29.4880)
 
@@ -46,19 +46,19 @@ class TestFootprintsToPixels:
 
 class TestFetchWithTimeout:
     def test_returns_result_when_fast(self):
-        from app.pipeline.footprints import fetch_with_timeout
+        from siteplan_backend.pipeline.footprints import fetch_with_timeout
         assert fetch_with_timeout(lambda: 42, 5.0, "x") == 42
 
     def test_raises_timeout_when_slow(self):
         import time
         import pytest
-        from app.pipeline.footprints import fetch_with_timeout
+        from siteplan_backend.pipeline.footprints import fetch_with_timeout
         with pytest.raises(TimeoutError):
             fetch_with_timeout(lambda: time.sleep(5), 0.2, "slow fetch")
 
     def test_propagates_fetch_error(self):
         import pytest
-        from app.pipeline.footprints import fetch_with_timeout
+        from siteplan_backend.pipeline.footprints import fetch_with_timeout
 
         def boom():
             raise ValueError("network boom")

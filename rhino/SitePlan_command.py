@@ -7,7 +7,7 @@ in this document's unit; no conversion on import).
 
 Run it:  Rhino 8 → ScriptEditor → open this file → ▶ Run
          (the backend must be running: cd backend &&
-          python -m uvicorn app.main:app --port 8000)
+          python -m uvicorn siteplan_backend.main:app --port 8000)
 
 The old rs.GetString prompt chain is gone: options now come from an Eto
 dialog with an embedded map (siteplan_dialog.py — bbox by drawing, address

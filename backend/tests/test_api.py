@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from fastapi.testclient import TestClient
 
-from app.main import app
-from app.api import jobs
+from siteplan_backend.main import app
+from siteplan_backend.api import jobs
 
 client = TestClient(app)
 
@@ -171,11 +171,11 @@ class TestValidation:
 
 class TestImagerySizing:
     def test_cayuga_bbox_fits(self):
-        from app.pipeline.imagery import usgs_export_size_px
+        from siteplan_backend.pipeline.imagery import usgs_export_size_px
         w, h = usgs_export_size_px(**BBOX, m_per_px=0.3)
         assert 2000 < w < 4096 and 2000 < h < 4096
 
     def test_degenerate_bbox_raises(self):
-        from app.pipeline.imagery import usgs_export_size_px
+        from siteplan_backend.pipeline.imagery import usgs_export_size_px
         with pytest.raises(ValueError):
             usgs_export_size_px(west=0, south=0, east=0, north=0, m_per_px=0.3)

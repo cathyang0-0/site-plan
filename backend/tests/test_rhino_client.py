@@ -86,5 +86,5 @@ class TestClient:
         import urllib.error
         monkeypatch.setattr(spc.urllib.request, "urlopen", _fake_urlopen(
             [urllib.error.URLError("connection refused")], []))
-        with pytest.raises(spc.SitePlanError, match="uvicorn app.main:app"):
+        with pytest.raises(spc.SitePlanError, match="uvicorn siteplan_backend.main:app"):
             spc.submit_job({"west": -1, "south": -1, "east": 1, "north": 1})

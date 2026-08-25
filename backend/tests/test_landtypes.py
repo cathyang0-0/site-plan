@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.pipeline.landtypes import (
+from siteplan_backend.pipeline.landtypes import (
     _mask_to_multipolygon,
     _make_thumbnail,
     _extract_superpixel_features,
@@ -195,7 +195,7 @@ class TestDetectLandTypes:
 
 class TestChaikinSmoothing:
     def test_closed_ring_stays_closed_and_grows(self):
-        from app.pipeline.landtypes import _chaikin_closed
+        from siteplan_backend.pipeline.landtypes import _chaikin_closed
         square = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
         out = _chaikin_closed(square, iterations=2)
         assert out[0] == out[-1]                      # still closed
@@ -204,19 +204,19 @@ class TestChaikinSmoothing:
     def test_corners_are_cut_inside_hull(self):
         # A cut corner pulls the boundary inward: no smoothed point sits at
         # the original sharp corner (10,10).
-        from app.pipeline.landtypes import _chaikin_closed
+        from siteplan_backend.pipeline.landtypes import _chaikin_closed
         square = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
         out = _chaikin_closed(square, iterations=2)
         assert (10, 10) not in out
         assert all(0 <= x <= 10 and 0 <= y <= 10 for x, y in out)
 
     def test_degenerate_ring_returned_asis(self):
-        from app.pipeline.landtypes import _chaikin_closed
+        from siteplan_backend.pipeline.landtypes import _chaikin_closed
         tiny = [(0, 0), (1, 1), (0, 0)]
         assert _chaikin_closed(tiny, iterations=2) == tiny
 
     def test_smoothed_polygon_valid(self):
-        from app.pipeline.landtypes import _mask_to_multipolygon
+        from siteplan_backend.pipeline.landtypes import _mask_to_multipolygon
         m = _solid_mask(300, 300, 60, 60, 240, 240)
         mp = _mask_to_multipolygon(m)  # chaikin on by default
         assert not mp.is_empty

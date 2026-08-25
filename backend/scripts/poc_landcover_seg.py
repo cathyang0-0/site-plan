@@ -276,7 +276,7 @@ def save_outputs(img_rgb, cls, out_prefix):
 def compare_kmeans(image, out_prefix):
     """Rasterize the current detect_land_types paved polygons for comparison."""
     import cv2
-    from app.pipeline.landtypes import detect_land_types
+    from siteplan_backend.pipeline.landtypes import detect_land_types
     W, H = image.size
     zero = np.zeros((H, W), np.uint8)
     print("Running current k-means detect_land_types for comparison ...")

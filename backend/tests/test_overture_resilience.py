@@ -8,8 +8,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.pipeline import overture_cache
-from app.pipeline.footprints import fetch_with_retry
+from siteplan_backend.pipeline import overture_cache
+from siteplan_backend.pipeline.footprints import fetch_with_retry
 
 
 @pytest.fixture(autouse=True)
@@ -20,7 +20,7 @@ def _tmp_cache(tmp_path, monkeypatch):
 class TestRetry:
     def test_succeeds_after_timeouts(self, monkeypatch):
         calls = []
-        import app.pipeline.footprints as fp
+        import siteplan_backend.pipeline.footprints as fp
 
         def fake_fetch_with_timeout(fn, timeout_s, what):
             calls.append(what)
@@ -32,7 +32,7 @@ class TestRetry:
         assert len(calls) == 3
 
     def test_raises_after_all_attempts(self, monkeypatch):
-        import app.pipeline.footprints as fp
+        import siteplan_backend.pipeline.footprints as fp
         monkeypatch.setattr(fp, "fetch_with_timeout",
                             lambda fn, t, w: (_ for _ in ()).throw(TimeoutError("dead")))
         with pytest.raises(TimeoutError):
@@ -40,7 +40,7 @@ class TestRetry:
 
     def test_non_timeout_error_not_retried(self, monkeypatch):
         calls = []
-        import app.pipeline.footprints as fp
+        import siteplan_backend.pipeline.footprints as fp
 
         def fake(fn, t, w):
             calls.append(1)
@@ -77,7 +77,7 @@ class TestCache:
         # The water cache stores RAW geometries ("water_raw") so river strips
         # can be re-buffered at any width; an areal polygon passes through.
         from shapely.geometry import Polygon
-        from app.pipeline.water import fetch_water_footprints
+        from siteplan_backend.pipeline.water import fetch_water_footprints
         lake = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
         overture_cache.put("water_raw", (-1.0, -1.0, 1.0, 1.0), [lake])
         [out] = fetch_water_footprints(-1.0, -1.0, 1.0, 1.0)
@@ -98,7 +98,7 @@ class TestAuthoritativeWater:
         # Overture water overlapping the vegetation must bite it away — no
         # land hatch may overlap the water hatch (the bug seen in Rhino).
         from shapely.geometry import Polygon
-        from app.pipeline.landtypes import apply_authoritative_water
+        from siteplan_backend.pipeline.landtypes import apply_authoritative_water
         water = [Polygon([(5, 0), (10, 0), (10, 10), (5, 10)])]  # right half of veg
         out = apply_authoritative_water(self._land(), water)
         assert out[0]["label"] == "water"          # authoritative water first
@@ -108,7 +108,7 @@ class TestAuthoritativeWater:
 
     def test_replaces_detected_water(self):
         from shapely.geometry import Polygon
-        from app.pipeline.landtypes import apply_authoritative_water
+        from siteplan_backend.pipeline.landtypes import apply_authoritative_water
         water = [Polygon([(50, 50), (60, 50), (60, 60), (50, 60)])]
         out = apply_authoritative_water(self._land(), water)
         waters = [lt for lt in out if lt["label"] == "water"]
@@ -117,21 +117,21 @@ class TestAuthoritativeWater:
 
     def test_swallowed_cover_dropped(self):
         from shapely.geometry import Polygon
-        from app.pipeline.landtypes import apply_authoritative_water
+        from siteplan_backend.pipeline.landtypes import apply_authoritative_water
         water = [Polygon([(-1, -1), (11, -1), (11, 11), (-1, 11)])]  # covers veg fully
         out = apply_authoritative_water(self._land(), water)
         assert [lt["label"] for lt in out] == ["water"]
 
     def test_no_water_is_noop(self):
-        from app.pipeline.landtypes import apply_authoritative_water
+        from siteplan_backend.pipeline.landtypes import apply_authoritative_water
         land = self._land()
         assert apply_authoritative_water(land, []) is land
 
 
 class TestDegradation:
     def test_failed_stage_warns_and_continues(self):
-        from app.api.jobs import Job, _overture_stage
-        from app.models.schemas import JobRequest, BoundingBox
+        from siteplan_backend.api.jobs import Job, _overture_stage
+        from siteplan_backend.models.schemas import JobRequest, BoundingBox
         job = Job(JobRequest(bbox=BoundingBox(west=0, south=0, east=1, north=1)))
 
         def boom():
@@ -146,8 +146,8 @@ class TestDegradation:
         assert len(job.warnings) == 1
 
     def test_warnings_flow_through_status(self):
-        from app.api.jobs import Job
-        from app.models.schemas import JobRequest, BoundingBox
+        from siteplan_backend.api.jobs import Job
+        from siteplan_backend.models.schemas import JobRequest, BoundingBox
         job = Job(JobRequest(bbox=BoundingBox(west=0, south=0, east=1, north=1)))
         job.warnings.append("roads: TimeoutError — continuing without")
         status = job.to_status()

@@ -32,7 +32,7 @@ import math
 import shapely
 from shapely.geometry import Polygon, LineString
 
-from app.pipeline.footprints import fetch_with_retry
+from siteplan_backend.pipeline.footprints import fetch_with_retry
 
 ATTRIBUTION = "Infrastructure © OpenStreetMap contributors, Overture Maps Foundation (ODbL)"
 
@@ -129,7 +129,7 @@ def fetch_infrastructure(west: float, south: float, east: float,
     (EPSG:4326), shapes only (Points dropped), excluded subtypes filtered.
     Cached per bbox; retries timed-out fetches.
     """
-    from app.pipeline import overture_cache
+    from siteplan_backend.pipeline import overture_cache
     bbox = (west, south, east, north)
     cached = overture_cache.get("infrastructure-v3", bbox)
     if cached is not None:

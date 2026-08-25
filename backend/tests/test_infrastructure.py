@@ -10,12 +10,12 @@ from shapely.geometry import Polygon, LineString
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.pipeline import overture_cache
-from app.pipeline.infrastructure import (
+from siteplan_backend.pipeline import overture_cache
+from siteplan_backend.pipeline.infrastructure import (
     fetch_infrastructure, infrastructure_to_pixels, classify,
     subtype_included, EXCLUDED_SUBTYPES, WIDTH_M, GROUP_STYLE, ATTRIBUTION,
 )
-from app.export.dxf import export_dxf, _nearest_dxf_lineweight
+from siteplan_backend.export.dxf import export_dxf, _nearest_dxf_lineweight
 
 
 @pytest.fixture(autouse=True)

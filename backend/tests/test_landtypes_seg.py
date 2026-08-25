@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.pipeline.landtypes_seg import (
+from siteplan_backend.pipeline.landtypes_seg import (
     detect_land_types_seg,
     _confident_classmap,
     _reclaim_water,

@@ -6,16 +6,15 @@ process and live in a dict; no Celery/Redis/broker. The web app and the Rhino
 client both speak to this through routes.py: submit → poll → export.
 
 Design notes:
-- The runner mirrors scripts/poc.py's stage order (land types BEFORE the tree
+- The runner keeps poc.py's proven stage order (land types BEFORE the tree
   filter so water can suppress lake trees; Overture water replaces detected
-  water). poc.py's tree/rasterize helpers are imported rather than duplicated.
+  water). Shared assembly helpers live in pipeline/assemble.py.
 - Detection results (buildings/roads/trees/land regions) are kept on the Job
   after completion so /export can re-render a DXF with new styling in seconds
   without re-running the ~6 min detection ("restyle without redetect").
 - Heavy imports stay function-local (module-scope torch segfaults the test
   suite — see docs/HANDOFF.md landmines).
 """
-import sys
 import tempfile
 import threading
 import traceback
@@ -23,9 +22,8 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from app.models.schemas import JobRequest, JobStatus, StyleConfig
-
-_SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
+from siteplan_backend.models.schemas import JobRequest, JobStatus, StyleConfig
+from siteplan_backend.pipeline import assemble
 
 _JOBS: dict[str, "Job"] = {}
 _JOBS_LOCK = threading.Lock()
@@ -75,16 +73,6 @@ def _run_job(job: Job) -> None:
         traceback.print_exc()
 
 
-def _poc():
-    """Import scripts/poc.py for its shared helpers (tree detection wrapper,
-    rasterizers, default tree block). TODO: promote these into app/pipeline so
-    the API doesn't reach into scripts/."""
-    if str(_SCRIPTS_DIR) not in sys.path:
-        sys.path.insert(0, str(_SCRIPTS_DIR))
-    import poc
-    return poc
-
-
 def _overture_stage(job: Job, name: str, default, fn):
     """Run an optional open-data stage; on failure, warn and continue with
     `default`. Rationale: Overture has real multi-hour slow spells, and one
@@ -113,7 +101,7 @@ def _run_pipeline(job: Job) -> None:
 
     # --- Imagery (always needed) ---
     stage("imagery", "running")
-    from app.pipeline.imagery import fetch_aerial_usgs
+    from siteplan_backend.pipeline.imagery import fetch_aerial_usgs
     image, scale = fetch_aerial_usgs(bb.west, bb.south, bb.east, bb.north,
                                      opts.scale_m_per_px)
     img_w, img_h = image.size
@@ -121,7 +109,6 @@ def _run_pipeline(job: Job) -> None:
     image.save(job.dir / "site.png")
     stage("imagery", "done")
 
-    poc = _poc()
     buildings, roads, water_polys, land_types, tree_placements = [], [], [], [], []
     detections = []
 
@@ -132,7 +119,7 @@ def _run_pipeline(job: Job) -> None:
     # --- Overture roads ---
     if "roads" in layers and opts.overture_roads:
         def _roads():
-            from app.pipeline.roads import build_roads
+            from siteplan_backend.pipeline.roads import build_roads
             return build_roads(image, bb.west, bb.south, bb.east, bb.north, scale,
                                class_widths=opts.road_class_widths)
         roads = _overture_stage(job, "roads", [], _roads)
@@ -142,7 +129,7 @@ def _run_pipeline(job: Job) -> None:
     # --- Overture buildings ---
     if "roofs" in layers and opts.overture_buildings:
         def _buildings():
-            from app.pipeline.footprints import (
+            from siteplan_backend.pipeline.footprints import (
                 fetch_building_footprints, footprints_to_pixels)
             geo = fetch_building_footprints(bb.west, bb.south, bb.east, bb.north)
             return footprints_to_pixels(geo, bb.west, bb.south, bb.east, bb.north,
@@ -155,8 +142,8 @@ def _run_pipeline(job: Job) -> None:
     if opts.overture_water and ("land_types" in layers or "trees" in layers):
         def _water():
             from shapely.ops import unary_union
-            from app.pipeline.water import fetch_water_footprints
-            from app.pipeline.footprints import footprints_to_pixels
+            from siteplan_backend.pipeline.water import fetch_water_footprints
+            from siteplan_backend.pipeline.footprints import footprints_to_pixels
             geo = fetch_water_footprints(
                 bb.west, bb.south, bb.east, bb.north,
                 **({"river_width_m": opts.river_width_m}
@@ -176,7 +163,7 @@ def _run_pipeline(job: Job) -> None:
     infrastructure = {"groups": {}}
     if "infrastructure" in layers and opts.overture_infrastructure:
         def _infra():
-            from app.pipeline.infrastructure import (
+            from siteplan_backend.pipeline.infrastructure import (
                 fetch_infrastructure, infrastructure_to_pixels)
             geo = fetch_infrastructure(bb.west, bb.south, bb.east, bb.north)
             return infrastructure_to_pixels(geo, bb.west, bb.south, bb.east,
@@ -190,7 +177,7 @@ def _run_pipeline(job: Job) -> None:
     contours = []
     if "contours" in layers and req.style.contours.visible:
         def _contours():
-            from app.pipeline.contours import build_contours
+            from siteplan_backend.pipeline.contours import build_contours
             return build_contours(bb.west, bb.south, bb.east, bb.north,
                                   req.style.contours.interval_m, img_w, img_h)
         contours = _overture_stage(job, "contours", [], _contours)
@@ -200,7 +187,7 @@ def _run_pipeline(job: Job) -> None:
     # --- Tree detection (raw) — the slow stage, after all network fetches ---
     if "trees" in layers:
         stage("trees", "running")
-        detections = poc.real_tree_detections(
+        detections = assemble.real_tree_detections(
             image, scale,
             stand_fill=opts.stand_fill,
             crown_size_scale=opts.crown_size_scale,
@@ -211,23 +198,23 @@ def _run_pipeline(job: Job) -> None:
     # --- Land types (before the tree filter: water suppresses lake trees) ---
     if "land_types" in layers:
         stage("land_types", "running")
-        from app.pipeline.landtypes import default_hatch_style
-        b_mask = poc._rasterize_polygons(buildings, img_w, img_h)
-        r_mask = poc._rasterize_roads(roads, img_w, img_h)
+        from siteplan_backend.pipeline.landtypes import default_hatch_style
+        b_mask = assemble.rasterize_polygons(buildings, img_w, img_h)
+        r_mask = assemble.rasterize_roads(roads, img_w, img_h)
         if opts.land_types_engine == "segmodel":
-            from app.pipeline.landtypes_seg import detect_land_types_seg
+            from siteplan_backend.pipeline.landtypes_seg import detect_land_types_seg
             kwargs = ({"paved_min_conf": opts.paved_min_conf}
                       if opts.paved_min_conf is not None else {})
             detected = detect_land_types_seg(image, b_mask, r_mask, **kwargs)
         else:
-            from app.pipeline.landtypes import detect_land_types
+            from siteplan_backend.pipeline.landtypes import detect_land_types
             detected = detect_land_types(image, b_mask, r_mask)
         land_types = [{"label": d["label"], "polygons": d["polygons"],
                        "style": default_hatch_style(d["label"])}
                       for d in detected]
         # Overture water is authoritative: replaces detected water AND is
         # carved out of every other cover (no land hatch over the water hatch).
-        from app.pipeline.landtypes import apply_authoritative_water
+        from siteplan_backend.pipeline.landtypes import apply_authoritative_water
         land_types = apply_authoritative_water(land_types, water_polys)
         stage("land_types", "done")
     else:
@@ -235,7 +222,7 @@ def _run_pipeline(job: Job) -> None:
 
     # --- Tree filtering (needs buildings + water) ---
     if "trees" in layers:
-        from app.pipeline.trees import filter_placements, suppress_over_water
+        from siteplan_backend.pipeline.trees import filter_placements, suppress_over_water
         accepted = filter_placements(detections, building_polygons=buildings)
         suppress_water = water_polys or [
             g for lt in land_types if lt["label"] == "water"
@@ -244,7 +231,7 @@ def _run_pipeline(job: Job) -> None:
         ]
         if suppress_water:
             accepted = suppress_over_water(accepted, suppress_water)
-        tree_placements = poc.detections_to_placements(accepted)
+        tree_placements = assemble.detections_to_placements(accepted)
         stage("trees", "done")
     else:
         stage("trees", "skipped")
@@ -252,16 +239,16 @@ def _run_pipeline(job: Job) -> None:
     # Data-license credits (ODbL requires attribution for Overture layers).
     attributions = []
     if roads:
-        from app.pipeline.roads import ATTRIBUTION as ROAD_ATTR
+        from siteplan_backend.pipeline.roads import ATTRIBUTION as ROAD_ATTR
         attributions.append(ROAD_ATTR)
     if buildings:
-        from app.pipeline.footprints import ATTRIBUTION as BLDG_ATTR
+        from siteplan_backend.pipeline.footprints import ATTRIBUTION as BLDG_ATTR
         attributions.append(BLDG_ATTR)
     if water_polys:
-        from app.pipeline.water import ATTRIBUTION as WATER_ATTR
+        from siteplan_backend.pipeline.water import ATTRIBUTION as WATER_ATTR
         attributions.append(WATER_ATTR)
     if infrastructure.get("groups"):
-        from app.pipeline.infrastructure import ATTRIBUTION as INFRA_ATTR
+        from siteplan_backend.pipeline.infrastructure import ATTRIBUTION as INFRA_ATTR
         attributions.append(INFRA_ATTR)
 
     # Mean neutral crown size (non-stand singles — apply_size_transform's
@@ -271,7 +258,7 @@ def _run_pipeline(job: Job) -> None:
     singles = [d for d in detections if not d.get("stand")]
     if singles:
         tree_mean_scale = (sum(d["radius_px"] for d in singles)
-                           / len(singles) / poc.DEFAULT_BLOCK_RADIUS_PX)
+                           / len(singles) / assemble.DEFAULT_BLOCK_RADIUS_PX)
 
     # Cache results for restyle-without-redetect, then export.
     job.geometry = {
@@ -279,7 +266,7 @@ def _run_pipeline(job: Job) -> None:
         "tree_placements": tree_placements,
         "tree_mean_scale": tree_mean_scale,
         "img_size": (img_w, img_h),
-        "tree_blocks": [poc.default_tree_block()],
+        "tree_blocks": [assemble.default_tree_block()],
         "land_types": land_types, "contours": contours,
         "infrastructure": infrastructure, "scale": scale,
         "origin_px": (img_w // 2, img_h // 2),
@@ -295,8 +282,8 @@ def tree_preview_payload(job: Job) -> dict:
     The JS mirrors rescale_placements' math over these values, so its
     circles are exactly what an export with the same sliders will render."""
     g = job.geometry
-    from app.pipeline.trees import MIN_CANOPY_RADIUS_M
-    block_r = _poc().DEFAULT_BLOCK_RADIUS_PX
+    from siteplan_backend.pipeline.trees import MIN_CANOPY_RADIUS_M
+    block_r = assemble.DEFAULT_BLOCK_RADIUS_PX
     img_w, img_h = g.get("img_size") or (0, 0)
     return {
         "placements": [{"x": p["position"][0], "y": p["position"][1],
@@ -313,7 +300,7 @@ def export_dxf_for(job: Job, style: Optional[StyleConfig]) -> Path:
     (seconds) — this is what lets clients restyle without re-detecting."""
     if job.geometry is None:
         raise RuntimeError("job has no geometry to export")
-    from app.export.dxf import export_dxf
+    from siteplan_backend.export.dxf import export_dxf
     sc = style or StyleConfig()
     g = job.geometry
 
@@ -324,8 +311,8 @@ def export_dxf_for(job: Job, style: Optional[StyleConfig]) -> Path:
     wants_resize = (getattr(sc.trees, "crown_size_scale", None) is not None
                     or getattr(sc.trees, "size_variance", None) is not None)
     if tree_placements and wants_resize and g.get("tree_mean_scale"):
-        from app.pipeline.trees import rescale_placements, MIN_CANOPY_RADIUS_M
-        block_r = _poc().DEFAULT_BLOCK_RADIUS_PX
+        from siteplan_backend.pipeline.trees import rescale_placements, MIN_CANOPY_RADIUS_M
+        block_r = assemble.DEFAULT_BLOCK_RADIUS_PX
         tree_placements = rescale_placements(
             tree_placements, g["tree_mean_scale"],
             sc.trees.crown_size_scale or 1.0,

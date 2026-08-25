@@ -6,7 +6,7 @@ in landtypes_seg.py is the fallback for non-georeferenced input).
 """
 import shapely
 from shapely.geometry import Polygon
-from app.pipeline.footprints import fetch_with_retry
+from siteplan_backend.pipeline.footprints import fetch_with_retry
 
 ATTRIBUTION = "Water © OpenStreetMap contributors, Overture Maps Foundation (ODbL)"
 # Rivers/streams arrive as centerLINES (no width). Buffer each into a fillable
@@ -38,7 +38,7 @@ def fetch_water_footprints(west: float, south: float, east: float, north: float,
 def _fetch_water_raw(west: float, south: float, east: float, north: float) -> list:
     """Raw Overture water geometries for a bbox (polygons AND centerlines),
     cached un-buffered so callers can buffer at any width."""
-    from app.pipeline import overture_cache
+    from siteplan_backend.pipeline import overture_cache
     bbox = (west, south, east, north)
     cached = overture_cache.get("water_raw", bbox)
     if cached is not None:

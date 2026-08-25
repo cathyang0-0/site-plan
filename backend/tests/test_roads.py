@@ -9,7 +9,7 @@ from shapely.geometry import LineString
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.pipeline import roads
+from siteplan_backend.pipeline import roads
 
 BBOX = dict(west=-98.4720, south=29.4820, east=-98.4640, north=29.4880)
 

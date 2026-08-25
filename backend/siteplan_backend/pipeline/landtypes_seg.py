@@ -31,7 +31,7 @@ import cv2
 
 # Reuse the whole polygon-cleanup + export-facing surface unchanged. Labels are
 # identical strings, so hatch styles / thumbnails carry over verbatim.
-from app.pipeline.landtypes import (
+from siteplan_backend.pipeline.landtypes import (
     _mask_to_multipolygon,
     _as_multipolygon,
     _make_thumbnail,

@@ -10,7 +10,7 @@ from shapely.geometry import (
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.pipeline.water import (
+from siteplan_backend.pipeline.water import (
     _water_polygons_from_geom,
     fetch_water_footprints,
     DEFAULT_RIVER_WIDTH_M,
@@ -87,7 +87,7 @@ class TestRiverWidthRebuffering:
     silently ignoring a new river width."""
 
     def _with_cached_line(self, monkeypatch):
-        from app.pipeline import overture_cache
+        from siteplan_backend.pipeline import overture_cache
         line = LineString([(0, 0.2), (0, 0.8)])
         monkeypatch.setattr(
             overture_cache, "get",

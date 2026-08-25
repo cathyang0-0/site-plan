@@ -104,13 +104,13 @@ class TestBuildRequest:
         assert style["trees"] == {"crown_size_scale": 1.5,
                                   "size_variance": 0.5}
         # and it validates against the real API contract
-        from app.models.schemas import StyleConfig
+        from siteplan_backend.models.schemas import StyleConfig
         parsed = StyleConfig(**style)
         assert parsed.trees.crown_size_scale == 1.5
 
     def test_matches_backend_schema(self):
         # The assembled body must validate against the real API contract.
-        from app.models.schemas import JobRequest
+        from siteplan_backend.models.schemas import JobRequest
         req = form.build_request(self.BBOX, contour_interval_m=1.524,
                                  road_class_widths=dict(form.ROAD_CLASS_DEFAULTS),
                                  river_width_m=5.0, size_variance=0.3,
@@ -124,9 +124,9 @@ class TestRoadClassDefaults:
     def test_mirrors_backend_table(self):
         # The grid's defaults must equal the backend's priors, or the UI
         # would lie about what "unchanged" means.
-        from app.pipeline.roads import CLASS_WIDTH_M
+        from siteplan_backend.pipeline.roads import CLASS_WIDTH_M
         assert dict(form.ROAD_CLASS_DEFAULTS) == CLASS_WIDTH_M
 
     def test_river_default_mirrors_backend(self):
-        from app.pipeline.water import DEFAULT_RIVER_WIDTH_M
+        from siteplan_backend.pipeline.water import DEFAULT_RIVER_WIDTH_M
         assert form.DEFAULT_RIVER_WIDTH_M == DEFAULT_RIVER_WIDTH_M

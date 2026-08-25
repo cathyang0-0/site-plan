@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.models.schemas import (
+from siteplan_backend.models.schemas import (
     BoundingBox,
     DetectOptions,
     TreeBlockCalibration,
@@ -59,14 +59,14 @@ class TestDetectOptions:
 
 class TestTreeStyle:
     def test_default_no_resize(self):
-        from app.models.schemas import StyleConfig
+        from siteplan_backend.models.schemas import StyleConfig
         sc = StyleConfig()
         assert sc.trees.crown_size_scale is None   # None = as detected
         assert sc.trees.size_variance is None
         assert sc.trees.line_weight_mm == 0.10     # layer style preserved
 
     def test_export_time_sizes_parse(self):
-        from app.models.schemas import StyleConfig
+        from siteplan_backend.models.schemas import StyleConfig
         sc = StyleConfig(trees={"crown_size_scale": 1.5, "size_variance": 0.5})
         assert sc.trees.crown_size_scale == 1.5
         assert sc.trees.size_variance == 0.5
@@ -75,7 +75,7 @@ class TestTreeStyle:
         assert sc.trees.line_weight_mm == 0.10
 
     def test_invalid_sizes_rejected(self):
-        from app.models.schemas import TreeStyle
+        from siteplan_backend.models.schemas import TreeStyle
         with pytest.raises(Exception):
             TreeStyle(crown_size_scale=0)
         with pytest.raises(Exception):

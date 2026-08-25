@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.pipeline.contours import (
+from siteplan_backend.pipeline.contours import (
     contour_levels, trace_contours, _chaikin_open, MIN_CONTOUR_LEN_PX,
 )
 
@@ -79,7 +79,7 @@ class TestContourBuildingClip:
         # two segments with a gap.
         import ezdxf
         from shapely.geometry import Polygon
-        from app.export.dxf import export_dxf
+        from siteplan_backend.export.dxf import export_dxf
         out = tmp_path / "clip.dxf"
         building = Polygon([(40, 0), (60, 0), (60, 30), (40, 30)])
         export_dxf(
@@ -101,7 +101,7 @@ class TestContourBuildingClip:
         # Z staircase + entity order instead. Keep the export free of it.
         import ezdxf
         from shapely.geometry import Polygon
-        from app.export.dxf import export_dxf
+        from siteplan_backend.export.dxf import export_dxf
         out = tmp_path / "nosort.dxf"
         export_dxf(
             output_path=out, buildings=[Polygon([(0, 0), (10, 0), (10, 10)])],
@@ -118,7 +118,7 @@ class TestContourBuildingClip:
 class TestExportWiring:
     def test_contours_layer_bottom_of_table_and_staircase(self, tmp_path):
         import ezdxf
-        from app.export.dxf import export_dxf, CONTOUR_Z, LAND_HATCH_Z
+        from siteplan_backend.export.dxf import export_dxf, CONTOUR_Z, LAND_HATCH_Z
         assert CONTOUR_Z < LAND_HATCH_Z  # below the hatches, per user spec
         out = tmp_path / "c.dxf"
         export_dxf(

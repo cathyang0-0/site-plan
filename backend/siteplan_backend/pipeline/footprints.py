@@ -87,7 +87,7 @@ def fetch_building_footprints(
     overture_cache) so repeat runs skip the network entirely; a miss
     retries timed-out fetches (raises TimeoutError only after all attempts).
     """
-    from app.pipeline import overture_cache
+    from siteplan_backend.pipeline import overture_cache
     bbox = (west, south, east, north)
     cached = overture_cache.get("building", bbox)
     if cached is not None:

@@ -7,7 +7,7 @@ Rhino document at real-world scale.
 
 1. Start the backend (once, in a terminal):
    ```bash
-   cd backend && python -m uvicorn app.main:app --port 8000
+   cd backend && python -m uvicorn siteplan_backend.main:app --port 8000
    ```
 2. In Rhino 8: `ScriptEditor` → open `SitePlan_command.py` → **Run** (▶).
 3. The SitePlan dialog opens:

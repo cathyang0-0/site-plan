@@ -34,7 +34,7 @@ def fetch_elevation_usgs(west: float, south: float, east: float, north: float,
                          m_per_px: float = DEM_M_PER_PX) -> np.ndarray:
     """Fetch a float32 elevation grid (meters) spanning exactly the bbox.
     Keyless; US coverage. Returns (H, W) float32, north row first."""
-    from app.pipeline.imagery import bbox_size_m
+    from siteplan_backend.pipeline.imagery import bbox_size_m
     width_m, height_m = bbox_size_m(west, south, east, north)
     px_w = min(DEM_MAX_PX, max(2, round(width_m / m_per_px)))
     px_h = min(DEM_MAX_PX, max(2, round(height_m / m_per_px)))

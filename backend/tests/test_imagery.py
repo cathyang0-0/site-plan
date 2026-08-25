@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.pipeline.imagery import lon_lat_to_tile, tile_to_lon_lat, meters_per_pixel, fetch_aerial_image, ZOOM, TILE_SIZE
+from siteplan_backend.pipeline.imagery import lon_lat_to_tile, tile_to_lon_lat, meters_per_pixel, fetch_aerial_image, ZOOM, TILE_SIZE
 
 
 class TestLonLatToTile:
@@ -135,8 +135,8 @@ class TestFetchAerialImage:
         mock_client.__exit__ = MagicMock(return_value=False)
         mock_client.get.return_value = mock_resp
 
-        import app.pipeline.imagery as imagery_mod
-        with patch("app.pipeline.imagery.httpx.Client", return_value=mock_client), \
+        import siteplan_backend.pipeline.imagery as imagery_mod
+        with patch("siteplan_backend.pipeline.imagery.httpx.Client", return_value=mock_client), \
              patch.object(imagery_mod, "ZOOM", 1):
             return fetch_aerial_image(west=west, south=south, east=east, north=north)
 

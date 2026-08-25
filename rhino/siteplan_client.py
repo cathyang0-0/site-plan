@@ -18,7 +18,7 @@ import urllib.request
 
 DEFAULT_BASE = "http://localhost:8000"
 START_HINT = ("cannot reach the Site Plan backend — start it with:\n"
-              "  cd backend && python -m uvicorn app.main:app --port 8000")
+              "  cd backend && python -m uvicorn siteplan_backend.main:app --port 8000")
 
 
 class SitePlanError(RuntimeError):

@@ -35,10 +35,9 @@ from shapely.geometry import Polygon, LineString, MultiPolygon
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.export.dxf import export_dxf
-from app.pipeline.trees import filter_placements, suppress_over_water, MIN_CANOPY_RADIUS_M
+from siteplan_backend.export.dxf import export_dxf
+from siteplan_backend.pipeline.trees import filter_placements, suppress_over_water, MIN_CANOPY_RADIUS_M
 
-DEFAULT_BLOCK_RADIUS_PX = 20.0  # matches default_tree_block()'s default radius
 
 
 def placeholder_buildings(img_w: int, img_h: int) -> list[Polygon]:
@@ -142,99 +141,17 @@ def placeholder_land_types(img_w: int, img_h: int) -> list[dict]:
     ]
 
 
-def default_tree_block(radius_px: float = 20.0, n_pts: int = 32) -> list[list]:
-    """
-    Default tree block: circle with a "+" in the center.
-    Returns a list of curve point-lists: [circle_pts, horizontal_line, vertical_line].
-    """
-    import math
-    circle = [
-        (radius_px * math.cos(2 * math.pi * i / n_pts),
-         radius_px * math.sin(2 * math.pi * i / n_pts))
-        for i in range(n_pts + 1)
-    ]
-    arm = radius_px * 0.3  # "+" arms are 30% of radius
-    horizontal = [(-arm, 0), (arm, 0)]
-    vertical   = [(0, -arm), (0, arm)]
-    return [circle, horizontal, vertical]
-
-
-def real_tree_detections(
-    image: Image.Image,
-    scale_m_per_px: float,
-    stand_fill: bool = True,
-    crown_size_scale: float = 1.0,
-    size_variance: float = 1.0,
-) -> list[dict]:
-    """Run real DeepForest detection + dense-stand fill. Returns raw
-    detections (pre overlap-filtering) so callers can cross-check other
-    modules against them before suppression runs."""
-    from app.pipeline.trees import (
-        detect_trees, apply_size_transform, fill_dense_stands, MAX_CANOPY_RADIUS_M,
-    )
-
-    detections = detect_trees(image, scale_m_per_px)
-    n_stands = sum(1 for d in detections if d.get("stand"))
-    print(f"  Raw detections: {len(detections)} ({n_stands} dense-stand boxes)")
-    # Reshape rendered crown sizes (variance then average) before stand fill,
-    # so the synthetic fill picks up the transformed size distribution.
-    apply_size_transform(
-        detections,
-        crown_size_scale=crown_size_scale,
-        size_variance=size_variance,
-    )
-    if stand_fill:
-        # fill_dense_stands puts synthetic trees AFTER real detections so
-        # filter_placements gives the real ones priority where they overlap.
-        detections = fill_dense_stands(detections, scale_m_per_px)
-        print(f"  After stand fill: {len(detections)}")
-    else:
-        # No fill: draw each stand as a single max-size tree so the dense
-        # canopy at least isn't blank.
-        for d in detections:
-            if d.get("stand"):
-                d["radius_m"] = MAX_CANOPY_RADIUS_M
-                d["radius_px"] = MAX_CANOPY_RADIUS_M / scale_m_per_px
-    return detections
-
-
-def _rasterize_polygons(polygons, img_w: int, img_h: int):
-    """Fill shapely Polygons into a uint8 mask (buildings -> exclusion mask
-    for land-type detection)."""
-    import cv2
-    import numpy as np
-    mask = np.zeros((img_h, img_w), dtype=np.uint8)
-    for poly in polygons:
-        pts = np.array(poly.exterior.coords, dtype=np.int32)
-        cv2.fillPoly(mask, [pts], 255)
-    return mask
-
-
-def _rasterize_roads(roads, img_w: int, img_h: int):
-    """Draw road centerlines at their width into a uint8 mask (road exclusion
-    mask for land-type detection)."""
-    import cv2
-    import numpy as np
-    mask = np.zeros((img_h, img_w), dtype=np.uint8)
-    for road in roads:
-        pts = np.array(road["line"].coords, dtype=np.int32)
-        thickness = max(1, int(round(road.get("width_px", 4))))
-        cv2.polylines(mask, [pts], isClosed=False, color=255, thickness=thickness)
-    return mask
-
-
-def detections_to_placements(detections: list[dict], n_blocks: int = 1) -> list[dict]:
-    """Convert accepted detections into tree block placements."""
-    rng = random.Random(0)
-    return [
-        {
-            "block_idx": rng.randrange(n_blocks),
-            "position": (det["x_px"], det["y_px"]),
-            "scale": det["radius_px"] / DEFAULT_BLOCK_RADIUS_PX,
-            "rotation": rng.uniform(0, 360),
-        }
-        for det in detections
-    ]
+# These six assembly helpers were promoted into the installable package
+# (siteplan_backend/pipeline/assemble.py) so the API server works without
+# scripts/ on disk; poc.py keeps its old names as aliases.
+from siteplan_backend.pipeline.assemble import (   # noqa: E402
+    DEFAULT_BLOCK_RADIUS_PX,
+    default_tree_block,
+    detections_to_placements,
+    real_tree_detections,
+    rasterize_polygons as _rasterize_polygons,
+    rasterize_roads as _rasterize_roads,
+)
 
 
 def main():
@@ -319,7 +236,7 @@ def main():
         detections = []
         if args.footprint_roads:
             print("Fetching road centerlines (Overture Maps)...")
-            from app.pipeline.roads import build_roads, ATTRIBUTION as ROAD_ATTR
+            from siteplan_backend.pipeline.roads import build_roads, ATTRIBUTION as ROAD_ATTR
             west, south, east, north = (float(v) for v in args.bbox.split(","))
             roads = build_roads(image, west, south, east, north, args.scale)
             attributions.append(ROAD_ATTR)
@@ -334,7 +251,7 @@ def main():
             )
         if args.footprint_buildings:
             print("Fetching building footprints (Overture Maps)...")
-            from app.pipeline.footprints import (
+            from siteplan_backend.pipeline.footprints import (
                 fetch_building_footprints, footprints_to_pixels, ATTRIBUTION,
             )
             west, south, east, north = (float(v) for v in args.bbox.split(","))
@@ -346,7 +263,7 @@ def main():
             print(f"  Footprints fetched: {len(buildings)}")
         elif args.real_buildings:
             print("Running real building detection (SAM2 zero-shot)...")
-            from app.pipeline.buildings import detect_buildings, suppress_canopy_false_positives
+            from siteplan_backend.pipeline.buildings import detect_buildings, suppress_canopy_false_positives
             buildings = detect_buildings(image, scale_m_per_px=args.scale)
             print(f"  Buildings detected: {len(buildings)}")
             if detections:
@@ -358,8 +275,8 @@ def main():
                 print(f"  Buildings after canopy cross-filter: {len(buildings)}")
         if args.footprint_water:
             print("Fetching water footprints (Overture Maps)...")
-            from app.pipeline.water import fetch_water_footprints, ATTRIBUTION as WATER_ATTR
-            from app.pipeline.footprints import footprints_to_pixels
+            from siteplan_backend.pipeline.water import fetch_water_footprints, ATTRIBUTION as WATER_ATTR
+            from siteplan_backend.pipeline.footprints import footprints_to_pixels
             west, south, east, north = (float(v) for v in args.bbox.split(","))
             geo_polys = fetch_water_footprints(west, south, east, north)
             water_px = footprints_to_pixels(
@@ -373,20 +290,20 @@ def main():
         # Land types run BEFORE the tree filter so its water regions can
         # suppress trees the detector hallucinated on the lake surface.
         if args.land_types:
-            from app.pipeline.landtypes import default_hatch_style
+            from siteplan_backend.pipeline.landtypes import default_hatch_style
             b_mask = _rasterize_polygons(buildings, img_w, img_h)
             r_mask = _rasterize_roads(roads, img_w, img_h)
             if args.land_types_engine == "segmodel":
                 print("Detecting land-cover types (OpenEarthMap SegFormer; "
                       "downloads weights on first use, eval-only)...")
-                from app.pipeline.landtypes_seg import (
+                from siteplan_backend.pipeline.landtypes_seg import (
                     detect_land_types_seg, PAVED_MIN_CONF,
                 )
                 conf = args.paved_min_conf if args.paved_min_conf is not None else PAVED_MIN_CONF
                 detected = detect_land_types_seg(image, b_mask, r_mask, paved_min_conf=conf)
             else:
                 print("Detecting land-cover types (unsupervised clustering)...")
-                from app.pipeline.landtypes import detect_land_types
+                from siteplan_backend.pipeline.landtypes import detect_land_types
                 detected = detect_land_types(image, b_mask, r_mask)
             land_types = [
                 {"label": d["label"], "polygons": d["polygons"],
@@ -396,7 +313,7 @@ def main():
             # Overture water is authoritative: replaces detected water and is
             # carved out of every other cover (shared helper — keeps this path
             # and the API runner from drifting).
-            from app.pipeline.landtypes import apply_authoritative_water
+            from siteplan_backend.pipeline.landtypes import apply_authoritative_water
             land_types = apply_authoritative_water(land_types, water_polys)
             print(f"  Land types: {', '.join(d['label'] for d in land_types)}")
         if args.real_trees:

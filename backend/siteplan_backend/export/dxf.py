@@ -218,7 +218,7 @@ def export_dxf(
         # entities displayed at the layer weight — user-observed), and layer
         # granularity matches their restyle-by-layer workflow anyway.
         # Registered thin -> thick so heavier classes sit higher in the table.
-        from app.pipeline.infrastructure import GROUP_STYLE as _INFRA_GROUPS
+        from siteplan_backend.pipeline.infrastructure import GROUP_STYLE as _INFRA_GROUPS
         for _gname, _gstyle in sorted(_INFRA_GROUPS.items(),
                                       key=lambda kv: kv[1]["weight_mm"]):
             _add_layer(doc, f"INFRA_{_gname.upper()}",
@@ -766,7 +766,7 @@ def _draw_multipolygon_hatches(msp, mpoly, to_drawing, layer_name: str, lt_style
             # lines (from landtypes.ACAD_PATTERNS) are baked in drawing units
             # with rotation/spacing pre-applied, so scale/angle must stay at
             # identity — any other value would double-transform the pattern.
-            from app.pipeline.landtypes import ACAD_PATTERNS
+            from siteplan_backend.pipeline.landtypes import ACAD_PATTERNS
             name = lt_style["hatch_pattern"]
             hatch.set_pattern_fill(
                 name, scale=1.0, angle=0.0,

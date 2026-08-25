@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.routes import router
+from siteplan_backend.api.routes import router
 
 app = FastAPI(title="Site Plan Drafter API", version="0.1.0")
 

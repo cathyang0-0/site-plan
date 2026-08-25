@@ -7,7 +7,7 @@ from shapely.geometry import Polygon
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.export.dxf import export_dxf
+from siteplan_backend.export.dxf import export_dxf
 
 
 def _tree_block():
@@ -86,7 +86,7 @@ class TestTreeBlockCoordinates:
 def _export_with_landtype(tmp_path, label="water"):
     """Export one building + one big land-type region styled by label."""
     from shapely.geometry import MultiPolygon
-    from app.pipeline.landtypes import default_hatch_style
+    from siteplan_backend.pipeline.landtypes import default_hatch_style
     out = tmp_path / "out.dxf"
     region = MultiPolygon([Polygon([(0, 0), (1000, 0), (1000, 800), (0, 800)])])
     export_dxf(
@@ -109,7 +109,7 @@ class TestAcadHatchPatterns:
         # The written HATCH must carry the AR-RROOF definition verbatim
         # (scale/angle identity) — this is what guarantees the exported file
         # matches the hand-tuned reference in any viewer.
-        from app.pipeline.landtypes import ACAD_PATTERNS
+        from siteplan_backend.pipeline.landtypes import ACAD_PATTERNS
         doc = _export_with_landtype(tmp_path, "water")
         hatches = [h for h in doc.modelspace().query("HATCH")
                    if h.dxf.layer == "LANDTYPE_1"]
@@ -125,7 +125,7 @@ class TestAcadHatchPatterns:
         assert [round(d, 6) for d in first.dash_length_items] == r_dashes
 
     def test_all_default_styles_are_acad_patterns(self):
-        from app.pipeline.landtypes import (
+        from siteplan_backend.pipeline.landtypes import (
             DEFAULT_HATCH_STYLES, ACAD_PATTERNS, default_hatch_style,
         )
         for label, style in DEFAULT_HATCH_STYLES.items():
@@ -163,7 +163,7 @@ class TestLayerStackingAndAnnotations:
         # Rhino ignores SORTENTSTABLE), so hatches are sunk slightly below the
         # z=0 drawing plane; all linework stays on it. Depth-tested viewers
         # then always draw outlines over hatches, with XY untouched.
-        from app.export.dxf import LAND_HATCH_Z
+        from siteplan_backend.export.dxf import LAND_HATCH_Z
         assert LAND_HATCH_Z < 0
         doc = _export_with_landtype(tmp_path)
         msp = doc.modelspace()
@@ -178,7 +178,7 @@ class TestLayerStackingAndAnnotations:
         # hatches, and every exported ring must be simple.
         import ezdxf
         from shapely.geometry import Polygon, MultiPolygon, LineString
-        from app.export.dxf import export_dxf
+        from siteplan_backend.export.dxf import export_dxf
         out = tmp_path / "bowtie.dxf"
         bowtie = Polygon([(0, 0), (100, 100), (100, 0), (0, 100)])  # crossing ring
         export_dxf(
@@ -202,7 +202,7 @@ class TestLayerStackingAndAnnotations:
 
     def test_hatch_safe_polygons_unit(self):
         from shapely.geometry import Polygon
-        from app.export.dxf import _hatch_safe_polygons
+        from siteplan_backend.export.dxf import _hatch_safe_polygons
         clean = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
         assert _hatch_safe_polygons(clean) == [clean]  # untouched, identity
         pinched = Polygon([(0, 0), (2, 0), (1, 1), (2, 2), (0, 2), (1, 1)])
@@ -217,7 +217,7 @@ class TestLayerStackingAndAnnotations:
         # tile is 1000 px, so a 3000x2800 px ocean must become many hatches.
         import ezdxf
         from shapely.geometry import Polygon, MultiPolygon
-        from app.export.dxf import export_dxf
+        from siteplan_backend.export.dxf import export_dxf
         out = tmp_path / "tiles.dxf"
         ocean = MultiPolygon([Polygon([(0, 0), (3000, 0), (3000, 2800), (0, 2800)])])
         export_dxf(

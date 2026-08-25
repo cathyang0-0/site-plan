@@ -11,9 +11,9 @@ from typing import Optional
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 
-from app.api import jobs
-from app.models.schemas import JobRequest, JobStatus, StyleConfig
-from app.pipeline.imagery import usgs_export_size_px
+from siteplan_backend.api import jobs
+from siteplan_backend.models.schemas import JobRequest, JobStatus, StyleConfig
+from siteplan_backend.pipeline.imagery import usgs_export_size_px
 
 router = APIRouter()
 
