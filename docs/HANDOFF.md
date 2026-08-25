@@ -5,18 +5,33 @@ Snapshot for a fresh session. Full design is in [`spec.md`](spec.md); this is
 
 ## What this is
 Aerial imagery → clean, layered, architect-style **DXF context plan** (buildings,
-roads, trees, land-cover hatches). Python backend; the whole pipeline is driven by
-[`backend/scripts/poc.py`](../backend/scripts/poc.py) (no API/frontend yet). Real CV
-models are wired in; a React frontend and FastAPI/Celery job layer are stubs.
+roads, trees, land-cover hatches), driven from a **working Rhino 8 plugin**
+(`rhino/`) against a **FastAPI backend** (`backend/`, importable package
+`siteplan_backend`, installable via `uv tool install` — see root README).
+`backend/scripts/poc.py` still drives the same pipeline headless. The React
+web frontend remains stubs.
 
-## What's built (all on `master`, 137 backend tests passing)
+## Distribution (方案A, 2026-08-25)
+Target: open-source on GitHub + Food4Rhino. Done: package rename
+(`app`→`siteplan_backend`), `pyproject.toml` + `siteplan-backend` entry
+command, poc helpers promoted into `siteplan_backend/pipeline/assemble.py`
+(the API no longer reaches into `scripts/`), preview page ships as package
+data, the Rhino command probes `/health` and **auto-starts the installed
+backend** (checks `~/.local/bin` explicitly — Rhino lacks shell PATH), root
+README with install/licensing. Before public release: choose a repo LICENSE,
+fill `NOMINATIM_EMAIL` in `rhino/siteplan_map.html`, test on Windows
+(WebView2 path untested), publish the `.rhproj`→`.rhp`/yak package (command
+file should be added to the project as `SitePlan.py` so the command is
+`SitePlan`), and keep segmodel out of the default install (CC BY-NC-SA).
+
+## What's built (all on `master`, 301 backend tests passing)
 | Module | File | Approach |
 |---|---|---|
-| Buildings | `app/pipeline/footprints.py`, `buildings.py` | **Overture footprints** (primary, georeferenced) + **SAM2 zero-shot** fallback + canopy cross-filter |
-| Roads | `app/pipeline/roads.py` | **Overture centerlines** + hybrid width (class prior nudged by CV pavement measurement) |
-| Trees | `app/pipeline/trees.py` | **DeepForest** + dense-stand fill + crown-size/variance controls + overlap-containment fix + **suppress-over-water** |
-| Land types | `app/pipeline/landtypes.py` | **unsupervised k-means** (color-forward features, semantic labels, Chaikin-smoothed polys, per-type layers, blue-green→water bias) |
-| DXF export | `app/export/dxf.py` | merged road corridors + fillets, roof white-fill masking, editable/uniquely-named tree blocks, one layer per land type, ODbL attribution |
+| Buildings | `siteplan_backend/pipeline/footprints.py`, `buildings.py` | **Overture footprints** (primary, georeferenced) + **SAM2 zero-shot** fallback + canopy cross-filter |
+| Roads | `siteplan_backend/pipeline/roads.py` | **Overture centerlines** + hybrid width (class prior nudged by CV pavement measurement) |
+| Trees | `siteplan_backend/pipeline/trees.py` | **DeepForest** + dense-stand fill + crown-size/variance controls + overlap-containment fix + **suppress-over-water** |
+| Land types | `siteplan_backend/pipeline/landtypes.py` | **unsupervised k-means** (color-forward features, semantic labels, Chaikin-smoothed polys, per-type layers, blue-green→water bias) |
+| DXF export | `siteplan_backend/export/dxf.py` | merged road corridors + fillets, roof white-fill masking, editable/uniquely-named tree blocks, one layer per land type, ODbL attribution |
 
 Open-data (Overture) beat CV decisively for buildings and roads; land cover stays CV
 (open data too coarse). Verified end-to-end on two sites: Alamo Heights (suburban) and
@@ -47,7 +62,7 @@ bridge; fallback documented in its docstring). Bridge = UITimer polling
 ## Not built yet
 - **Web frontend** — `frontend/src/components/*.jsx` are still stubs; the plugin
   dialog covers the primary flow. Web-only wants: style panel, tree-block upload.
-- **Celery/Redis** — not wired (in-process job threads in `app/api/jobs.py` are
+- **Celery/Redis** — not wired (in-process job threads in `siteplan_backend/api/jobs.py` are
   fine for solo/local use).
 - **Land-cover semantic-seg model** — integrated behind `land_types_engine=
   "segmodel"`, license question still open (see below).
