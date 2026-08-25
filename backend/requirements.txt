@@ -1,11 +1,10 @@
+# Dev-pinned versions for working on the repo. The CANONICAL dependency
+# list for installing the backend as a tool is pyproject.toml.
 # Web framework
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 python-multipart==0.0.9
 
-# Job queue
-celery==5.4.0
-redis==5.0.8
 
 # CV & ML
 # deepforest 2.x loads pretrained weights from HuggingFace via

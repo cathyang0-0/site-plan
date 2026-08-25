@@ -68,3 +68,6 @@ lightning_logs/
 backend/.overture_cache/
 docs/Notes for myself.md
 docs/申请材料计划.md
+backend/dist/
+backend/*.egg-info/
+backend/siteplan_backend.egg-info/

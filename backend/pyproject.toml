@@ -1,0 +1,51 @@
+# Packaging for the backend as an installable tool. End-user install:
+#
+#   uv tool install "siteplan-backend @ git+https://github.com/cathyang0-0/site-plan#subdirectory=backend"
+#   siteplan-backend
+#
+# uv tool installs into an isolated venv (torch and friends don't touch the
+# user's Python), puts `siteplan-backend` on PATH, and the Rhino plugin can
+# then auto-start it. Version floors are the versions the test suite runs
+# against; the segmodel land-cover engine is an optional extra because its
+# OpenEarthMap weights are CC BY-NC-SA (evaluation-only until resolved).
+
+[project]
+name = "siteplan-backend"
+version = "0.1.0"
+description = "Aerial imagery to architect-style DXF site plans (buildings, roads, trees, land cover) - backend for the SitePlan Rhino plugin"
+requires-python = ">=3.11"
+license = { text = "TBD" }   # set before publishing (see repo README)
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+    "torch>=2.4",
+    "torchvision>=0.19",
+    "opencv-python>=4.10",
+    "scikit-image>=0.24",
+    "scikit-learn>=1.5",
+    "deepforest>=2.1",
+    "rasterio>=1.4",
+    "pyproj>=3.6",
+    "shapely>=2.0",
+    "numpy>=1.26",
+    "Pillow>=10.4",
+    "overturemaps>=1.0",
+    "ezdxf>=1.3",
+    "rhino3dm>=8.9",
+    "httpx>=0.27",
+    "pydantic>=2.8",
+]
+
+[project.optional-dependencies]
+segmodel = ["transformers>=5"]
+
+[project.scripts]
+siteplan-backend = "siteplan_backend.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["siteplan_backend"]

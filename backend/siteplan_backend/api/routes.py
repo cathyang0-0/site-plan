@@ -93,7 +93,8 @@ async def job_preview(job_id: str):
     """The tree-preview page itself. Served from the backend (not file://)
     so its image/trees fetches are same-origin — no CORS involved."""
     _completed_job(job_id)
-    page = Path(__file__).resolve().parents[3] / "rhino" / "siteplan_preview.html"
+    # Package data, not a repo path — an installed wheel has no rhino/ dir.
+    page = Path(__file__).resolve().parents[1] / "static" / "siteplan_preview.html"
     if not page.exists():
         raise HTTPException(status_code=500, detail="preview page missing")
     return FileResponse(page, media_type="text/html")

@@ -30,10 +30,79 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 for _name in ("siteplan_client", "siteplan_form", "siteplan_dialog"):
     sys.modules.pop(_name, None)
 import siteplan_dialog
+import siteplan_client as spc
 
 STICKY_KEY = "siteplan_last_bbox"
 LAST_JOB_KEY = "siteplan_last_job"   # {"job_id", "style"} of the last tree run
 DEFAULT_BBOX = "-76.5515,42.5305,-76.5415,42.5385"
+
+
+BACKEND_CMD = "siteplan-backend"
+INSTALL_CMD = ('uv tool install "siteplan-backend @ '
+               'git+https://github.com/cathyang0-0/site-plan'
+               '#subdirectory=backend"')
+
+
+def _find_backend_cmd():
+    """Locate the installed `siteplan-backend` command. Rhino's GUI process
+    often lacks the user's shell PATH (especially uv's ~/.local/bin), so
+    check the known install locations explicitly after which()."""
+    import shutil
+    exe = shutil.which(BACKEND_CMD)
+    if exe:
+        return exe
+    home = os.path.expanduser("~")
+    candidates = [
+        os.path.join(home, ".local", "bin", BACKEND_CMD),          # uv tool
+        os.path.join(home, ".local", "bin", BACKEND_CMD + ".exe"),  # uv, Win
+        "/usr/local/bin/" + BACKEND_CMD,
+        "/opt/homebrew/bin/" + BACKEND_CMD,
+    ]
+    for cand in candidates:
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
+def _ensure_backend():
+    """Backend reachable? If not, try to start the installed one; failing
+    that, tell the user exactly how to get it. Returns True when healthy."""
+    if spc.health():
+        return True
+
+    exe = _find_backend_cmd()
+    if exe is None:
+        rs.MessageBox(
+            "The SitePlan backend isn't running, and no installed copy was "
+            "found.\n\n"
+            "One-time install (needs uv, from https://docs.astral.sh/uv):\n"
+            "  " + INSTALL_CMD + "\n\n"
+            "Then run this command again — it will start the backend "
+            "automatically.\n\n"
+            "(Developing from the repo instead? Start it yourself:\n"
+            "  cd backend && python -m uvicorn siteplan_backend.main:app)",
+            title="SitePlan")
+        return False
+
+    # First start downloads model weights lazily later; the server itself
+    # comes up in seconds. Detach so it outlives this Rhino session.
+    import subprocess
+    import tempfile
+    import time
+    log_path = os.path.join(tempfile.gettempdir(), "siteplan-backend.log")
+    with open(log_path, "ab") as log:
+        subprocess.Popen([exe], stdout=log, stderr=log,
+                         start_new_session=True)
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        rs.Prompt("SitePlan: starting the local backend…")
+        if spc.health(timeout=2.0):
+            rs.Prompt("SitePlan: backend ready")
+            return True
+        rs.Sleep(500)
+    rs.MessageBox("Started the backend but it didn't answer within 30 s.\n"
+                  "Check its log:\n" + log_path, title="SitePlan")
+    return False
 
 
 def _sticky_bbox():
@@ -47,6 +116,9 @@ def _sticky_bbox():
 
 
 def run():
+    if not _ensure_backend():
+        return
+
     # Ask the backend to write the DXF NATIVELY in this document's unit —
     # no unit conversion on import, so hatch pattern spacings stay correct.
     doc_units = {2: "mm", 3: "cm", 4: "m", 8: "in", 9: "ft"}.get(

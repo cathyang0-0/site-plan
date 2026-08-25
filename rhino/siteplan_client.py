@@ -48,6 +48,16 @@ def _request(method: str, url: str, body=None, timeout: float = 60):
         raise SitePlanError(f"{START_HINT}\n({exc.reason})")
 
 
+def health(base: str = DEFAULT_BASE, timeout: float = 3.0) -> bool:
+    """True if the backend answers GET /health. Never raises — this is the
+    probe the Rhino command uses to decide whether to auto-start it."""
+    try:
+        status = _request("GET", f"{base}/health", timeout=timeout)
+        return isinstance(status, dict) and status.get("status") == "ok"
+    except SitePlanError:
+        return False
+
+
 def submit_job(bbox: dict, layers=None, options=None, style=None,
                base: str = DEFAULT_BASE) -> str:
     """POST /api/jobs. Returns the job_id."""

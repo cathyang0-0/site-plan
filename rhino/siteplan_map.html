@@ -173,9 +173,12 @@ map.on("mouseup", function (e) {
 });
 
 // ---- address search (Nominatim) --------------------------------------------
-// Low volume (one request per Enter). Browsers won't let a page set
-// User-Agent; Nominatim's sanctioned alternative for identification is the
-// email query param — add "&email=you@example.com" if usage ever grows.
+// Low volume (one request per search). Browsers won't let a page set
+// User-Agent; Nominatim's sanctioned identification channel is the email
+// query param. REQUIRED BEFORE PUBLIC RELEASE: set this to the project
+// maintainer's contact (never the end user's) per the Nominatim usage
+// policy — a distributed plugin multiplies query volume.
+const NOMINATIM_EMAIL = "";
 const search = document.getElementById("search");
 const searchMsg = document.getElementById("search-msg");
 
@@ -183,7 +186,8 @@ function searchAddress() {
   if (!search.value.trim()) return;
   searchMsg.textContent = "…";
   fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" +
-        encodeURIComponent(search.value.trim()))
+        encodeURIComponent(search.value.trim()) +
+        (NOMINATIM_EMAIL ? "&email=" + encodeURIComponent(NOMINATIM_EMAIL) : ""))
     .then(function (r) { return r.json(); })
     .then(function (hits) {
       if (!hits.length) { searchMsg.textContent = "no result"; return; }

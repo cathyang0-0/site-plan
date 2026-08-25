@@ -5,10 +5,14 @@ Rhino document at real-world scale.
 
 ## Run it (Rhino 8)
 
-1. Start the backend (once, in a terminal):
-   ```bash
-   cd backend && python -m uvicorn siteplan_backend.main:app --port 8000
-   ```
+1. Have the backend available — either way works:
+   - **Installed** (end users): `uv tool install "siteplan-backend @
+     git+https://github.com/cathyang0-0/site-plan#subdirectory=backend"`,
+     once. The command below finds it and **starts it automatically**.
+   - **Dev repo**: start it yourself in a terminal:
+     ```bash
+     cd backend && python -m uvicorn siteplan_backend.main:app --port 8000
+     ```
 2. In Rhino 8: `ScriptEditor` → open `SitePlan_command.py` → **Run** (▶).
 3. The SitePlan dialog opens:
    - **Map (left):** search an address, then draw the site box — the "Draw
