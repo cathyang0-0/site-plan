@@ -39,7 +39,6 @@ Rhino 8 CPython Eto gotchas baked into this file (each cost a real run):
 """
 import json
 import os
-import sys
 import tempfile
 import threading
 import time
@@ -49,9 +48,8 @@ import Eto.Forms as forms
 import Eto.Drawing as drawing
 import Rhino.UI
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import siteplan_form as form
-import siteplan_client as spc
+from siteplan_plugin import form
+from siteplan_plugin import client as spc
 
 # Stage keys as the backend reports them (jobs.py), in pipeline order.
 STAGES = ["imagery", "roads", "buildings", "water", "infrastructure",

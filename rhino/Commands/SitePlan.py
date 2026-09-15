@@ -5,9 +5,11 @@ Generates an architect-style site plan and imports it into the ACTIVE Rhino
 document, on proper layers, at real-world scale (the DXF is written natively
 in this document's unit; no conversion on import).
 
-Run it:  Rhino 8 → ScriptEditor → open this file → ▶ Run
-         (the backend must be running: cd backend &&
-          python -m uvicorn siteplan_backend.main:app --port 8000)
+This file is the `SitePlan` COMMAND of the ScriptEditor project
+(../SitePlan.rhproj — the filename becomes the command name when the
+plugin is published). Dev run: Rhino 8 → ScriptEditor → open this file →
+▶ Run; the command auto-starts an installed backend, or start the dev
+one yourself (cd backend && python -m uvicorn siteplan_backend.main:app).
 
 The old rs.GetString prompt chain is gone: options now come from an Eto
 dialog with an embedded map (siteplan_dialog.py — bbox by drawing, address
@@ -21,16 +23,23 @@ import sys
 import rhinoscriptsyntax as rs
 import scriptcontext as sc
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Dev-run support: when this file runs loose from the repo (ScriptEditor ▶,
+# not the published plugin), the project's Libraries/ dir isn't on sys.path
+# — add it. In the published plugin the library is embedded and importable
+# already; the extra path entry simply won't exist and is harmless.
+_LIB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "Libraries")
+if os.path.isdir(_LIB_DIR) and _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
 
 # ScriptEditor caches imported modules for the whole Rhino session — without
-# this, edits to the siteplan_* files silently don't apply on re-run.
+# this, edits to the siteplan_plugin files silently don't apply on re-run.
 # importlib.reload proved unreliable here; evicting from sys.modules before
 # the import forces a genuinely fresh read from disk.
-for _name in ("siteplan_client", "siteplan_form", "siteplan_dialog"):
+for _name in [m for m in list(sys.modules) if m.startswith("siteplan_plugin")]:
     sys.modules.pop(_name, None)
-import siteplan_dialog
-import siteplan_client as spc
+from siteplan_plugin import dialog as siteplan_dialog
+from siteplan_plugin import client as spc
 
 STICKY_KEY = "siteplan_last_bbox"
 LAST_JOB_KEY = "siteplan_last_job"   # {"job_id", "style"} of the last tree run

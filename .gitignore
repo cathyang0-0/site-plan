@@ -76,3 +76,4 @@ backend/siteplan_backend.egg-info/
 .obsidian/
 .claude/
 figures/
+rhino/build/

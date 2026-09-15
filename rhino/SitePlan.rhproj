@@ -1,0 +1,58 @@
+{
+  "host": {
+    "name": "Rhino3D",
+    "version": "8.34.26223+11002",
+    "os": "macOS",
+    "arch": "arm64"
+  },
+  "id": "327ee944-abe0-46a6-9ce9-54ffe78c144a",
+  "identity": {
+    "name": "SitePlan",
+    "version": "0.1.0",
+    "publisher": {
+      "email": "142811243+cathyang0-0@users.noreply.github.com",
+      "name": "Catherine Yang"
+    },
+    "description": "Architect-style DXF site plans from aerial imagery: draw a bounding box on a map, get buildings, roads, trees, land-cover hatches and contours imported into the active document at real-world scale. Requires the free siteplan-backend running locally.",
+    "copyright": "Copyright \u00a9 2026 Catherine Yang",
+    "license": "MIT",
+    "url": "https://github.com/cathyang0-0/site-plan"
+  },
+  "settings": {
+    "buildPath": "build/",
+    "buildTarget": {
+      "host": {
+        "name": "Rhino3D",
+        "version": "8"
+      },
+      "title": "Rhino3D (8.*)",
+      "slug": "rh8"
+    },
+    "publishTarget": {
+      "title": "McNeel Yak Server"
+    }
+  },
+  "codes": [
+    {
+      "id": "564b6028-d174-4d0c-9525-3d584a195271",
+      "language": {
+        "id": "*.*.python",
+        "version": "3.*.*"
+      },
+      "title": "SitePlan",
+      "uri": "Commands/SitePlan.py"
+    }
+  ],
+  "libraries": [
+    {
+      "type": "uri",
+      "library": {
+        "base": "Libraries/siteplan_plugin/",
+        "language": {
+          "id": "*.*.python",
+          "version": "3.*.*"
+        }
+      }
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-"""Tests for rhino/siteplan_form.py — the dialog's pure-Python logic.
+"""Tests for rhino/Libraries/siteplan_plugin/form.py — the dialog's pure-Python logic.
 Same trick as test_rhino_client.py: the rhino/ dir is importable because
 the module deliberately has no Eto/Rhino imports."""
 import sys
@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parents[2] / "rhino"))
+sys.path.insert(0, str(Path(__file__).parents[2] / "rhino" / "Libraries"))
 
-import siteplan_form as form
+from siteplan_plugin import form
 
 
 class TestParseInterval:

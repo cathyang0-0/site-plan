@@ -1,4 +1,4 @@
-"""Tests for the Rhino client's pure HTTP module (rhino/siteplan_client.py).
+"""Tests for the Rhino client's pure HTTP module (rhino/Libraries/siteplan_plugin/client.py).
 
 The client is stdlib-only by design (runs inside Rhino's CPython); here we
 fake urllib's urlopen so no server is needed — same test philosophy as the
@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parents[2] / "rhino"))
+sys.path.insert(0, str(Path(__file__).parents[2] / "rhino" / "Libraries"))
 
-import siteplan_client as spc
+from siteplan_plugin import client as spc
 
 
 class FakeResponse(io.BytesIO):

@@ -25,9 +25,11 @@ import Eto.Drawing as drawing
 import Rhino.UI
 import scriptcontext as sc
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.modules.pop("siteplan_client", None)   # ScriptEditor caches imports
-import siteplan_client as spc
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "Libraries"))
+for _name in [m for m in list(sys.modules) if m.startswith("siteplan_plugin")]:
+    sys.modules.pop(_name, None)           # ScriptEditor caches imports
+from siteplan_plugin import client as spc
 
 
 class Probe(forms.Dialog):

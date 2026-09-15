@@ -65,10 +65,20 @@ tiles, the JS bridge round-trips, and the address search works.
   imports the DXF on Rhino's main thread. Thin on purpose.
 - `probe_webview.py` — one-time platform probe (see above).
 
-## Packaging as a real plugin (later)
+## Building the plugin (.rhp / .yak)
 
-Rhino 8's ScriptEditor can compile Python scripts into an installable `.rhp`
-plugin with its own command name and toolbar button: ScriptEditor →
-**Publish** → Rhino Plugin. The command is already shaped for that (a single
-`run()` entry point); packaging is deferred until the dialog has been used
-in anger for a while.
+This folder IS a ScriptEditor project (`SitePlan.rhproj`): the command lives
+in `Commands/SitePlan.py` (filename = command name) and the shared modules
+in `Libraries/siteplan_plugin/` (embedded into the plugin at build). Build
+headlessly:
+
+```bash
+rhino/build.sh
+```
+
+Artifacts land in `rhino/build/rh8/`: `SitePlan.rhp` (drag into Rhino to
+install), `SitePlan.rui` (toolbar), and a `siteplan-*.yak` package for the
+Package Manager / Food4Rhino. (`build.sh` wraps `rhinocode project build`
+through a space-free symlink — rhinocode's wrapper mishandles spaces in
+paths.) Installed users then just type `SitePlan`; the command auto-starts
+the installed backend.
