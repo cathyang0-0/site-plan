@@ -310,11 +310,17 @@ def main():
                  "style": default_hatch_style(d["label"])}
                 for d in detected
             ]
-            # Overture water is authoritative: replaces detected water and is
-            # carved out of every other cover (shared helper — keeps this path
-            # and the API runner from drifting).
+        # Overture water is authoritative: replaces detected water and is
+        # carved out of every other cover (shared helper — keeps this path
+        # and the API runner from drifting). Deliberately OUTSIDE the
+        # --land-types branch: on a site with no usable imagery (non-US, so no
+        # USGS aerial, and no MAPBOX_TOKEN) the CV engines can't run, but
+        # Overture water still can — and a lagoon/coastal site is exactly
+        # where the water layer matters most.
+        if water_polys:
             from siteplan_backend.pipeline.landtypes import apply_authoritative_water
             land_types = apply_authoritative_water(land_types, water_polys)
+        if land_types:
             print(f"  Land types: {', '.join(d['label'] for d in land_types)}")
         if args.real_trees:
             # >30% building-overlap rule suppresses rooftop tree detections.
