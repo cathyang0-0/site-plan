@@ -58,9 +58,10 @@ STAGES = ["imagery", "roads", "buildings", "water", "infrastructure",
           "contours", "trees", "land_types", "export"]
 GLYPH = {"running": "…", "done": "✓", "skipped": "–", "failed": "✗"}
 
-MAP_URL = System.Uri(
-    "file://" + os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             "siteplan_map.html"))
+# Backend-served (it ships inside the siteplan-backend wheel as package
+# data) so the .rhp plugin only distributes Python files. Safe ordering:
+# SitePlan_command runs _ensure_backend() before opening this dialog.
+MAP_URL = System.Uri(spc.DEFAULT_BASE + "/api/map")
 
 
 def _props(ctrl, **values):

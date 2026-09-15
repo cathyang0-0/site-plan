@@ -88,6 +88,17 @@ async def job_trees(job_id: str):
     return jobs.tree_preview_payload(_completed_job(job_id))
 
 
+@router.get("/map")
+async def map_page():
+    """The bbox-picker map page the Rhino dialog embeds. Backend-served for
+    the same reason as /preview below — and so the .rhp plugin only has to
+    ship Python files (HTML rides in the backend wheel as package data)."""
+    page = Path(__file__).resolve().parents[1] / "static" / "siteplan_map.html"
+    if not page.exists():
+        raise HTTPException(status_code=500, detail="map page missing")
+    return FileResponse(page, media_type="text/html")
+
+
 @router.get("/jobs/{job_id}/preview")
 async def job_preview(job_id: str):
     """The tree-preview page itself. Served from the backend (not file://)

@@ -14,7 +14,7 @@ name = "siteplan-backend"
 version = "0.1.0"
 description = "Aerial imagery to architect-style DXF site plans (buildings, roads, trees, land cover) - backend for the SitePlan Rhino plugin"
 requires-python = ">=3.11"
-license = { text = "TBD" }   # set before publishing (see repo README)
+license = { text = "MIT" }
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",

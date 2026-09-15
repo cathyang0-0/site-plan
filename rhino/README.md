@@ -42,9 +42,9 @@ document's unit, so geometry AND hatch spacings import true.
 
 ## First run on a new machine
 
-Run `probe_webview.py` in the ScriptEditor once — it verifies inside Rhino's
-WebView that the map tiles render (CORS), the JS bridge round-trips, and the
-address search works, and its docstring says what to do if any check fails.
+Run `probe_webview.py` in the ScriptEditor once (backend running) — it
+verifies inside Rhino's WebView that the backend-served map page renders its
+tiles, the JS bridge round-trips, and the address search works.
 
 ## Files
 
@@ -54,10 +54,13 @@ address search works, and its docstring says what to do if any check fails.
 - `siteplan_form.py` — the dialog's logic (request assembly, parsing,
   estimates), pure Python — headless-tested by
   `backend/tests/test_rhino_form.py`.
-- `siteplan_map.html` — the embedded map page (MapLibre + keyless USGS
-  tiles + Nominatim search). Develop it in a normal browser; the dialog
-  polls `window.getState()` and pushes `initFromPython(bbox)`.
-- `siteplan_dialog.py` — the Eto dialog (widgets + threads only).
+- `siteplan_dialog.py` — the Eto dialog (widgets + threads only). Its two
+  embedded pages (bbox map, tree preview) are served BY THE BACKEND
+  (`/api/map`, `/api/jobs/{id}/preview`) from
+  `backend/siteplan_backend/static/` — so this folder ships Python only,
+  which is all the `.rhp` plugin format needs to carry. Develop the pages
+  in a normal browser; the dialog polls `window.getState()` and pushes
+  `initFromPython(bbox)` / `setParams(...)`.
 - `SitePlan_command.py` — the Rhino-facing command: opens the dialog, then
   imports the DXF on Rhino's main thread. Thin on purpose.
 - `probe_webview.py` — one-time platform probe (see above).

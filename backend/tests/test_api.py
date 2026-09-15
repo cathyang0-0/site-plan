@@ -168,6 +168,13 @@ class TestValidation:
     def test_health(self):
         assert client.get("/health").json() == {"status": "ok"}
 
+    def test_map_page_served(self):
+        # The dialog's bbox picker loads from here (package data — the .rhp
+        # plugin ships no HTML).
+        res = client.get("/api/map")
+        assert res.status_code == 200
+        assert "getState" in res.text and "initFromPython" in res.text
+
 
 class TestImagerySizing:
     def test_cayuga_bbox_fits(self):
