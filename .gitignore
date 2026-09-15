@@ -71,3 +71,8 @@ docs/申请材料计划.md
 backend/dist/
 backend/*.egg-info/
 backend/siteplan_backend.egg-info/
+
+# personal editor/session state — never public
+.obsidian/
+.claude/
+figures/
