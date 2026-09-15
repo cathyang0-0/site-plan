@@ -18,11 +18,22 @@ command, poc helpers promoted into `siteplan_backend/pipeline/assemble.py`
 (the API no longer reaches into `scripts/`), preview page ships as package
 data, the Rhino command probes `/health` and **auto-starts the installed
 backend** (checks `~/.local/bin` explicitly — Rhino lacks shell PATH), root
-README with install/licensing. Before public release: choose a repo LICENSE,
-fill `NOMINATIM_EMAIL` in `rhino/siteplan_map.html`, test on Windows
-(WebView2 path untested), publish the `.rhproj`→`.rhp`/yak package (command
-file should be added to the project as `SitePlan.py` so the command is
-`SitePlan`), and keep segmodel out of the default install (CC BY-NC-SA).
+README with install/licensing.
+
+Update 2026-09-15: LICENSE = MIT; `rhino/` restructured into a buildable
+ScriptEditor project (`SitePlan.rhproj`, command `Commands/SitePlan.py`,
+library `Libraries/siteplan_plugin/`); `rhino/build.sh` builds
+`.rhp`+`.rui`+`.yak` headlessly via rhinocode (space-in-path workaround
+inside). The map page moved into the backend wheel (`/api/map`) so the
+plugin ships Python only. `.obsidian` untracked; personal notes verified
+absent from history. Remaining before public: project contact email (user
+registering; goes into `NOMINATIM_EMAIL` in
+`backend/siteplan_backend/static/siteplan_map.html` + `.rhproj` publisher +
+root README), in-Rhino smoke test of the restructured command, Windows test
+(WebView2 untested), flip repo public, Food4Rhino listing (draft when email
+exists), segmodel stays out of the default install (CC BY-NC-SA). Also
+decide: `test_data/img/ref.jpg` (style reference, unknown copyright) and the
+two `test_img*.png` — verify origin or drop from the public repo.
 
 ## What's built (all on `master`, 301 backend tests passing)
 | Module | File | Approach |
