@@ -40,10 +40,14 @@ siteplan-backend
 
 ### 2. The Rhino plugin
 
-Until the packaged plugin is published: download/clone this repo, then in
-Rhino 8 run `ScriptEditor`, open `rhino/SitePlan_command.py`, press ▶.
-See [rhino/README.md](rhino/README.md) for the full tour (map picker,
-options, tree preview) and a first-run WebView probe.
+Once published, installation is one click: Rhino 8 → `PackageManager` →
+search **SitePlan** → Install → restart Rhino → type `SitePlan`.
+
+Until then (or for development): download/clone this repo, then in Rhino 8
+run `ScriptEditor`, open `rhino/Commands/SitePlan.py`, press ▶ — or build
+the plugin yourself with `rhino/build.sh`. See
+[rhino/README.md](rhino/README.md) for the full tour (map picker, options,
+tree preview) and a first-run WebView probe.
 
 ## Developing
 
@@ -72,4 +76,9 @@ design and current status.
   optional SegFormer engine (`pip extra: segmodel`) uses OpenEarthMap
   weights that are **CC BY-NC-SA (non-commercial)** — it is evaluation-only
   and never enabled by default.
-- **This repo's license:** TBD before first release.
+- **This repo's license:** [MIT](LICENSE).
+
+## Contact
+
+Questions, bugs, ideas: open a GitHub issue, or email
+**siteplan.drafter@outlook.com**.

@@ -10,7 +10,7 @@
     "name": "SitePlan",
     "version": "0.1.0",
     "publisher": {
-      "email": "142811243+cathyang0-0@users.noreply.github.com",
+      "email": "siteplan.drafter@outlook.com",
       "name": "Catherine Yang"
     },
     "description": "Architect-style DXF site plans from aerial imagery: draw a bounding box on a map, get buildings, roads, trees, land-cover hatches and contours imported into the active document at real-world scale. Requires the free siteplan-backend running locally.",
