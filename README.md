@@ -10,6 +10,13 @@ exported as a DXF with editable blocks, real hatch patterns, and one layer
 per feature class. A live preview lets you tune tree sizes after detection
 and import exactly what you see.
 
+| Aerial input (USGS) | Generated site plan (DXF in Rhino) |
+|:---:|:---:|
+| ![Aerial photo of Myers Point, Cayuga Lake](docs/images/cayuga_aerial.jpg) | ![Generated architect-style site plan of the same site](docs/images/cayuga_siteplan.png) |
+
+*Myers Point, Cayuga Lake NY — water and vegetation hatches, road
+corridors, building roofs, and detected trees as editable blocks.*
+
 **Two parts:**
 
 | Part | What it is | Where it runs |
