@@ -136,7 +136,9 @@ class TestContourStyle:
 class TestStyleConfig:
     def test_defaults(self):
         sc = StyleConfig()
-        assert sc.roofs.line_weight_mm == 0.40     # heaviest: outline hierarchy
+        # user's print-calibrated hierarchy: roofs/infra one step above roads
+        assert sc.roofs.line_weight_mm == 0.20
+        assert sc.infrastructure.line_weight_mm == 0.20
         assert sc.roads.line_weight_mm == 0.18
         assert sc.trees.line_weight_mm == 0.10
         assert sc.land_types == []                 # [] = hatch-reference defaults

@@ -112,10 +112,12 @@ class StyleConfig(BaseModel):
     units: Literal["m", "mm", "cm", "ft", "in"] = "m"
     # Defaults mirror poc.py's architectural hierarchy: roofs heaviest,
     # roads secondary, trees/land texture lightest.
-    roofs: LayerStyle = LayerStyle(color="#000000", line_weight_mm=0.40)
+    # 0.20 (was 0.40): user's call after seeing prints — roofs one step
+    # above roads, not dominating the sheet.
+    roofs: LayerStyle = LayerStyle(color="#000000", line_weight_mm=0.20)
     # Between roads and roofs in visual weight: reads as built structure
     # (pier decks, bridges) but stays subordinate to roof outlines.
-    infrastructure: LayerStyle = LayerStyle(color="#000000", line_weight_mm=0.30)
+    infrastructure: LayerStyle = LayerStyle(color="#000000", line_weight_mm=0.20)
     roads: LayerStyle = LayerStyle(color="#333333", line_weight_mm=0.18)
     trees: TreeStyle = TreeStyle()
     # Empty list = the pipeline's hatch-reference defaults (one entry per
