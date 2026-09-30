@@ -20,6 +20,14 @@ data, the Rhino command probes `/health` and **auto-starts the installed
 backend** (checks `~/.local/bin` explicitly — Rhino lacks shell PATH), root
 README with install/licensing.
 
+Update 2026-09-30: **installed-plugin path user-verified end-to-end** (yak
+install → restart → `SitePlan` → dialog). Two runtime landmines found and
+fixed on the way, both recorded in the Landmines section below: published
+Python plugins never register project Libraries (build.py now bundles the
+modules into the command), and yak/rhinocode CLIs break on paths with
+spaces. Local install for testing:
+`yak install --source=<space-free-link-to rhino/build/rh8> siteplan`.
+
 Update 2026-09-15: LICENSE = MIT; `rhino/` restructured into a buildable
 ScriptEditor project (`SitePlan.rhproj`, command `Commands/SitePlan.py`,
 library `Libraries/siteplan_plugin/`); `rhino/build.sh` builds
