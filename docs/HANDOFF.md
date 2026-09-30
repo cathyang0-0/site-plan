@@ -20,6 +20,15 @@ data, the Rhino command probes `/health` and **auto-starts the installed
 backend** (checks `~/.local/bin` explicitly — Rhino lacks shell PATH), root
 README with install/licensing.
 
+Update 2026-09-30 (later): **PUBLISHED.** Repo public at
+github.com/cathyang0-0/site-plan (history purged of private imagery — the
+repo was deleted+recreated to kill GitHub's refs/pull/* which survive force
+pushes; remember that for any future sensitive-file incident). Package live
+on yak.rhino3d.com: `yak push` as the user's Rhino account; PackageManager
+search "SitePlan" installs it worldwide. Remaining: Food4Rhino page (copy
+ready in docs/food4rhino-listing.md, user shoots 4 screenshots), Windows
+testing via community.
+
 Update 2026-09-30: **installed-plugin path user-verified end-to-end** (yak
 install → restart → `SitePlan` → dialog). Two runtime landmines found and
 fixed on the way, both recorded in the Landmines section below: published
