@@ -77,3 +77,9 @@ backend/siteplan_backend.egg-info/
 .claude/
 figures/
 rhino/build/
+
+# private/unlicensed reference imagery — kept on disk, never in the repo
+test_data/img/ref.jpg
+test_data/img/test_img.png
+test_data/img/test_img 2.png
+test_data/img/cpp.png
