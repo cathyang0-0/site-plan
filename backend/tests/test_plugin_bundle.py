@@ -51,7 +51,7 @@ class TestBundle:
         from siteplan_plugin import form
         from siteplan_plugin import client as spc
         assert form.parse_interval("5ft") == pytest.approx(1.524)
-        assert spc.DEFAULT_BASE.startswith("http://localhost")
+        assert spc.DEFAULT_BASE.startswith("http://127.0.0.1")
 
     def test_sources_roundtrip_exactly(self, registered_bundle):
         # zlib+base64 must be lossless — compare a known function's behavior

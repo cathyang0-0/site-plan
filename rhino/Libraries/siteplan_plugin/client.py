@@ -16,7 +16,10 @@ import time
 import urllib.error
 import urllib.request
 
-DEFAULT_BASE = "http://localhost:8000"
+# 127.0.0.1, not "localhost": the backend binds IPv4 127.0.0.1 only, and on
+# Windows "localhost" resolves to ::1 first — every probe then burns its
+# timeout on a refused IPv6 connect before trying IPv4.
+DEFAULT_BASE = "http://127.0.0.1:8000"
 START_HINT = ("cannot reach the Site Plan backend — start it with:\n"
               "  cd backend && python -m uvicorn siteplan_backend.main:app --port 8000")
 

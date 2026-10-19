@@ -99,24 +99,55 @@ def _ensure_backend():
         return False
 
     # First start downloads model weights lazily later; the server itself
-    # comes up in seconds. Detach so it outlives this Rhino session.
+    # comes up in seconds — but the very first launch after install can be
+    # much slower (Python compiles .pyc files; on Windows, Defender scans
+    # every freshly installed DLL), so wait generously. Detach so it
+    # outlives this Rhino session.
     import subprocess
     import tempfile
     import time
     log_path = os.path.join(tempfile.gettempdir(), "siteplan-backend.log")
+    popen_kw = {}
+    if os.name == "nt":
+        # No console window, and not tied to Rhino's process group.
+        popen_kw["creationflags"] = (subprocess.CREATE_NO_WINDOW |
+                                     subprocess.CREATE_NEW_PROCESS_GROUP)
+    else:
+        popen_kw["start_new_session"] = True
     with open(log_path, "ab") as log:
-        subprocess.Popen([exe], stdout=log, stderr=log,
-                         start_new_session=True)
-    deadline = time.time() + 30
+        proc = subprocess.Popen([exe], stdout=log, stderr=log,
+                                stdin=subprocess.DEVNULL, **popen_kw)
+    deadline = time.time() + 120
     while time.time() < deadline:
-        rs.Prompt("SitePlan: starting the local backend…")
+        rs.Prompt("SitePlan: starting the local backend (first start can "
+                  "take a minute)…")
         if spc.health(timeout=2.0):
             rs.Prompt("SitePlan: backend ready")
             return True
+        if proc.poll() is not None:     # crashed — no point waiting
+            rs.MessageBox("The SitePlan backend exited during startup "
+                          "(code {}).\n\nLast lines of its log ({}):\n\n{}"
+                          .format(proc.returncode, log_path,
+                                  _log_tail(log_path)), title="SitePlan")
+            return False
         rs.Sleep(500)
-    rs.MessageBox("Started the backend but it didn't answer within 30 s.\n"
-                  "Check its log:\n" + log_path, title="SitePlan")
+    rs.MessageBox("Started the backend but it didn't answer within 2 min.\n\n"
+                  "Last lines of its log ({}):\n\n{}".format(
+                      log_path, _log_tail(log_path)), title="SitePlan")
     return False
+
+
+def _log_tail(path, lines=15):
+    """Last few lines of the backend log, for error dialogs — so a user can
+    screenshot the actual cause instead of hunting for a temp file."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 8000))
+            text = f.read().decode("utf-8", "replace")
+        return "\n".join(text.splitlines()[-lines:]) or "(log is empty)"
+    except OSError as exc:
+        return "(couldn't read log: {})".format(exc)
 
 
 def _sticky_bbox():
