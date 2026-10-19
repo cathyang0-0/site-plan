@@ -66,15 +66,22 @@ def _find_backend_cmd():
     if exe:
         return exe
     home = os.path.expanduser("~")
-    candidates = [
-        os.path.join(home, ".local", "bin", BACKEND_CMD),          # uv tool
-        os.path.join(home, ".local", "bin", BACKEND_CMD + ".exe"),  # uv, Win
-        "/usr/local/bin/" + BACKEND_CMD,
-        "/opt/homebrew/bin/" + BACKEND_CMD,
+    dirs = [
+        os.path.join(home, ".local", "bin"),        # uv tool / pipx (all OSes)
+        "/usr/local/bin",
+        "/opt/homebrew/bin",
     ]
-    for cand in candidates:
-        if os.path.exists(cand):
-            return cand
+    # conda / pip installs (dev setups: `pip install -e backend`) — a Dock-
+    # launched Rhino doesn't see the shell PATH that conda activation sets.
+    for root in (home, "/opt", "C:\\ProgramData"):
+        for conda in ("anaconda3", "miniconda3", "miniforge3", "mambaforge"):
+            dirs.append(os.path.join(root, conda, "bin"))       # macOS/Linux
+            dirs.append(os.path.join(root, conda, "Scripts"))   # Windows
+    for d in dirs:
+        for name in (BACKEND_CMD, BACKEND_CMD + ".exe"):
+            cand = os.path.join(d, name)
+            if os.path.isfile(cand):
+                return cand
     return None
 
 
