@@ -57,6 +57,7 @@ def _register_bundle():
             setattr(pkg, name, mod)
 
 _register_bundle()
+_SITEPLAN_BUNDLED = True   # tells the command below to skip its dev reload
 # ---- END GENERATED BUNDLE -------------------------------------------------
 
 '''

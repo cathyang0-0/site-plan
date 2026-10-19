@@ -73,3 +73,24 @@ class TestBundle:
     def test_default_modules_include_dialog(self):
         assert siteplan_build.MODULES == ["__init__", "client", "form",
                                           "dialog"]
+
+    def test_bundle_survives_command_dev_reload(self, registered_bundle):
+        # Regression: the command's dev hot-reload block used to evict the
+        # bundled modules right after the prelude registered them, so the
+        # published plugin failed to import siteplan_plugin on any machine
+        # without the repo's Libraries/ on sys.path. Run the real reload
+        # block in a namespace where the prelude's flag is set.
+        src = (_BUILD_PY.parent / "Commands" / "SitePlan.py").read_text()
+        start = src.index("if not globals().get(\"_SITEPLAN_BUNDLED\")")
+        end = src.index("from siteplan_plugin import dialog")
+        exec(compile(src[start:end], "reload-block", "exec"),
+             {"sys": sys, "_SITEPLAN_BUNDLED": True})
+        assert sys.modules.get("siteplan_plugin") is registered_bundle
+        from siteplan_plugin import client  # noqa: F401
+
+    def test_prelude_sets_bundled_flag(self):
+        text = siteplan_build.make_bundled_command(
+            modules=["__init__", "client", "form"])
+        ns = {}
+        exec(compile(text[:text.index(END_MARK)], "bundle-prelude", "exec"), ns)
+        assert ns.get("_SITEPLAN_BUNDLED") is True

@@ -36,8 +36,13 @@ if os.path.isdir(_LIB_DIR) and _LIB_DIR not in sys.path:
 # this, edits to the siteplan_plugin files silently don't apply on re-run.
 # importlib.reload proved unreliable here; evicting from sys.modules before
 # the import forces a genuinely fresh read from disk.
-for _name in [m for m in list(sys.modules) if m.startswith("siteplan_plugin")]:
-    sys.modules.pop(_name, None)
+# NOT in the published plugin: there the build's bundle prelude (above this
+# file's text, see rhino/build.py) has just registered the modules in
+# sys.modules and there is no disk copy — evicting them breaks the import.
+if not globals().get("_SITEPLAN_BUNDLED"):
+    for _name in [m for m in list(sys.modules)
+                  if m.startswith("siteplan_plugin")]:
+        sys.modules.pop(_name, None)
 from siteplan_plugin import dialog as siteplan_dialog
 from siteplan_plugin import client as spc
 
