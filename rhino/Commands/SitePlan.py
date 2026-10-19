@@ -114,9 +114,15 @@ def _ensure_backend():
                                      subprocess.CREATE_NEW_PROCESS_GROUP)
     else:
         popen_kw["start_new_session"] = True
+    # Rhino's embedded Python sets PYTHONHOME/PYTHONPATH in its own process;
+    # inherited, they point the backend's (different-version) Python at
+    # Rhino's stdlib and it dies on startup with "Could not import runpy
+    # module … No module named 'importlib._abc'". Start it with them removed.
+    env = {k: v for k, v in os.environ.items()
+           if not k.upper().startswith("PYTHON")}
     with open(log_path, "ab") as log:
         proc = subprocess.Popen([exe], stdout=log, stderr=log,
-                                stdin=subprocess.DEVNULL, **popen_kw)
+                                stdin=subprocess.DEVNULL, env=env, **popen_kw)
     deadline = time.time() + 120
     while time.time() < deadline:
         rs.Prompt("SitePlan: starting the local backend (first start can "
