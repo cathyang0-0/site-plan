@@ -4,7 +4,8 @@
 
   Keyless by design: MapLibre GL (CDN), USGS imagery tiles (the SAME imagery
   the backend pipeline fetches, so what you frame is what gets processed),
-  Nominatim for address search. No accounts, no tokens.
+  Photon/Nominatim for place search (see the search section). No
+  accounts, no tokens.
 
   Bridge contract with the dialog (poll-based; see siteplan_dialog.py):
     - Python reads state:  ExecuteScript("return window.getState()")
@@ -30,9 +31,15 @@
     border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,.3);
     font: 13px -apple-system, "Segoe UI", sans-serif;
   }
-  #searchbox { top: 10px; left: 10px; padding: 6px; display: flex; gap: 6px; }
-  #search { width: 230px; border: 1px solid #bbb; border-radius: 4px; padding: 4px 6px; }
+  #searchbox { top: 10px; left: 10px; padding: 6px; }
+  #searchrow { display: flex; gap: 6px; }
+  #search { width: 270px; border: 1px solid #bbb; border-radius: 4px; padding: 4px 6px; }
   #search-msg { color: #a33; align-self: center; max-width: 160px; }
+  #suggest { list-style: none; margin: 4px 0 0; padding: 0; max-width: 340px; }
+  #suggest:empty { display: none; }
+  #suggest li { padding: 5px 6px; border-radius: 4px; cursor: pointer; }
+  #suggest li.sel { background: #2b6cb0; color: #fff; }
+  #suggest .sub { display: block; font-size: 11px; opacity: .7; }
   #drawbtn {
     top: 10px; right: 10px; padding: 7px 12px; cursor: pointer;
     border: 1px solid #888; user-select: none;
@@ -45,9 +52,13 @@
 <body>
 <div id="map"></div>
 <div id="searchbox" class="panel">
-  <input id="search" type="text" placeholder="Search address…">
-  <button id="search-go">Go</button>
-  <span id="search-msg"></span>
+  <div id="searchrow">
+    <input id="search" type="text" autocomplete="off"
+           placeholder="Address, place, or lat, lng…">
+    <button id="search-go">Go</button>
+    <span id="search-msg"></span>
+  </div>
+  <ul id="suggest"></ul>
 </div>
 <div id="drawbtn" class="panel">Draw box</div>
 <div id="readout" class="panel">Draw a box (button or shift+drag) to set the site bbox.</div>
@@ -172,40 +183,284 @@ map.on("mouseup", function (e) {
   setBbox(b);
 });
 
-// ---- address search (Nominatim) --------------------------------------------
-// Low volume (one request per search). Browsers won't let a page set
-// User-Agent; Nominatim's sanctioned identification channel is the email
-// query param. REQUIRED BEFORE PUBLIC RELEASE: set this to the project
-// maintainer's contact (never the end user's) per the Nominatim usage
-// policy — a distributed plugin multiplies query volume.
+// ---- search: coordinates, suggestions, geocoding ---------------------------
+// Three inputs share one box:
+//   1. Coordinates, parsed locally (no network): "lat, lng" as Google Maps
+//      copies it, "lng, lat", hemisphere/DMS forms (42°32'N 76°32'W), and
+//      four numbers = a bbox in our own "W,S,E,N" format (the sticky/readout
+//      format). When the order is ambiguous, BOTH readings go in the list.
+//   2. Typeahead suggestions from Photon (photon.komoot.io): built for
+//      search-as-you-type; its README welcomes use "as long as the number of
+//      requests stay in a reasonable limit" — hence debounce + cache + abort.
+//   3. Nominatim, only as a one-shot fallback on Enter/Go when Photon finds
+//      nothing. NOT for suggestions: its usage policy lists client-side
+//      auto-complete under "strictly forbidden and will get you banned".
+// Nominatim identifies callers by the email param (browsers can't set
+// User-Agent) — the maintainer's contact, never the end user's.
 const NOMINATIM_EMAIL = "siteplan.drafter@outlook.com";
+const PHOTON_URL = "https://photon.komoot.io/api/";
+const SUGGEST_DEBOUNCE_MS = 350;
+const SUGGEST_MIN_CHARS = 3;
 const search = document.getElementById("search");
 const searchMsg = document.getElementById("search-msg");
+const suggestEl = document.getElementById("suggest");
 
-function searchAddress() {
-  if (!search.value.trim()) return;
-  searchMsg.textContent = "…";
-  fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" +
-        encodeURIComponent(search.value.trim()) +
-        (NOMINATIM_EMAIL ? "&email=" + encodeURIComponent(NOMINATIM_EMAIL) : ""))
+// Rough USGS imagery coverage (US + territories) — only used to decide which
+// reading of an ambiguous coordinate pair to list first.
+function inCoverage(lat, lng) {
+  return lat >= 17 && lat <= 72 && lng >= -180 && lng <= -64;
+}
+function validLatLng(lat, lng) {
+  return isFinite(lat) && isFinite(lng) &&
+         Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+}
+function fmtLat(v) { return Math.abs(v).toFixed(5) + "°" + (v >= 0 ? "N" : "S"); }
+function fmtLng(v) { return Math.abs(v).toFixed(5) + "°" + (v >= 0 ? "E" : "W"); }
+
+function pointItem(lat, lng, how) {
+  return { kind: "point", lat: lat, lng: lng,
+           title: fmtLat(lat) + ", " + fmtLng(lng), sub: how };
+}
+
+// Returns a list of candidate items, [] if the text isn't coordinates.
+function parseCoords(text) {
+  const t = text.trim();
+  if (!t) return [];
+
+  // Hemisphere letters (decimal or DMS): the letters fix the order.
+  // e.g. 42.5345N 76.5465W  ·  42°32'04.2"N 76°32'47.4"W
+  const hemiRe = /(\d+(?:\.\d+)?)\s*°?\s*(?:(\d+(?:\.\d+)?)\s*['′]\s*)?(?:(\d+(?:\.\d+)?)\s*(?:["″]|'')\s*)?([NSEW])\b/gi;
+  const hemi = [];
+  let m;
+  while ((m = hemiRe.exec(t)) !== null) {
+    const v = (+m[1]) + (m[2] ? m[2] / 60 : 0) + (m[3] ? m[3] / 3600 : 0);
+    const h = m[4].toUpperCase();
+    hemi.push({ axis: (h === "N" || h === "S") ? "lat" : "lng",
+                v: (h === "S" || h === "W") ? -v : v });
+  }
+  if (hemi.length === 2 && t.replace(hemiRe, "").replace(/[\s,;\/]/g, "") === "" &&
+      hemi[0].axis !== hemi[1].axis) {
+    const lat = hemi[0].axis === "lat" ? hemi[0].v : hemi[1].v;
+    const lng = hemi[0].axis === "lng" ? hemi[0].v : hemi[1].v;
+    return validLatLng(lat, lng) ? [pointItem(lat, lng, "coordinates")] : [];
+  }
+
+  // Plain numbers. Anything other than separators (letters!) → not coords,
+  // so "123 Main St" or a ZIP code goes to the geocoder.
+  const nums = (t.match(/[-+]?\d+(?:\.\d+)?/g) || []).map(Number);
+  if (t.replace(/[-+]?\d+(?:\.\d+)?/g, "").replace(/[\s,;\/()\[\]°→>-]/g, "") !== "")
+    return [];
+
+  const byPreference = function (items) {   // in-coverage first, stable
+    return items.map(function (it, i) { return { it: it, i: i }; })
+      .sort(function (a, b) {
+        return (b.it.cov - a.it.cov) || (a.i - b.i); })
+      .map(function (x) { return x.it; });
+  };
+
+  if (nums.length === 2) {
+    const a = nums[0], b = nums[1], out = [];
+    // lat, lng first: that's what Google Maps / phones copy.
+    if (validLatLng(a, b)) {
+      const it = pointItem(a, b, "read as lat, lng"); it.cov = inCoverage(a, b);
+      out.push(it);
+    }
+    if (a !== b && validLatLng(b, a)) {
+      const it = pointItem(b, a, "read as lng, lat"); it.cov = inCoverage(b, a);
+      out.push(it);
+    }
+    if (out.length === 1) out[0].sub = "coordinates";
+    return byPreference(out);
+  }
+
+  if (nums.length === 4) {
+    const mk = function (lngs, lats, how) {
+      const b = { west: Math.min(lngs[0], lngs[1]), east: Math.max(lngs[0], lngs[1]),
+                  south: Math.min(lats[0], lats[1]), north: Math.max(lats[0], lats[1]) };
+      if (!validLatLng(b.south, b.west) || !validLatLng(b.north, b.east) ||
+          b.east - b.west < 1e-5 || b.north - b.south < 1e-5) return null;
+      return { kind: "bbox", bbox: b, sub: how,
+               cov: inCoverage((b.south + b.north) / 2, (b.west + b.east) / 2),
+               title: "Box " + b.west.toFixed(4) + ", " + b.south.toFixed(4) +
+                      " → " + b.east.toFixed(4) + ", " + b.north.toFixed(4) +
+                      "  (" + areaKm2(b).toFixed(2) + " km²)" };
+    };
+    const out = [
+      mk([nums[0], nums[2]], [nums[1], nums[3]], "bbox as W, S, E, N"),
+      mk([nums[1], nums[3]], [nums[0], nums[2]], "bbox as S, W, N, E"),
+    ].filter(Boolean);
+    return byPreference(out);
+  }
+  return [];
+}
+
+// ---- suggestion list --------------------------------------------------------
+let items = [];      // what the list currently shows
+let selIdx = 0;
+let itemsFor = "";   // the query `items` belong to
+
+function renderSuggest() {
+  suggestEl.innerHTML = "";
+  items.forEach(function (it, i) {
+    const li = document.createElement("li");
+    li.className = i === selIdx ? "sel" : "";
+    li.textContent = it.title;
+    if (it.sub) {
+      const sub = document.createElement("span");
+      sub.className = "sub"; sub.textContent = it.sub;
+      li.appendChild(sub);
+    }
+    // mousedown, not click: fires before the input's blur closes the list
+    li.addEventListener("mousedown", function (ev) {
+      ev.preventDefault(); choose(it);
+    });
+    suggestEl.appendChild(li);
+  });
+}
+function showItems(q, list) {
+  items = list; selIdx = 0; itemsFor = q; renderSuggest();
+}
+function closeSuggest() { items = []; itemsFor = ""; renderSuggest(); }
+
+let marker = null;
+let chosenTitle = null;   // the box shows the pick's title; don't re-search it
+function choose(it) {
+  closeSuggest();
+  searchMsg.textContent = "";
+  search.value = chosenTitle = it.title;
+  if (marker) { marker.remove(); marker = null; }
+  // maxDuration matters: flyTo's auto duration scales with screen-space
+  // distance, so a cross-country hop at zoom 15 would animate for HOURS.
+  if (it.kind === "bbox") {
+    // A typed bbox IS the site — set it, same as drawing it.
+    setBbox(it.bbox);
+    map.fitBounds([[it.bbox.west, it.bbox.south], [it.bbox.east, it.bbox.north]],
+                  { padding: 60, maxDuration: 2500 });
+    return;
+  }
+  // Points and places: fly there and mark it; the user draws the bbox
+  // themselves (deliberate — the right framing is a judgment call, see the
+  // dialog's guidance notes).
+  marker = new maplibregl.Marker({ color: "#e53e3e" })
+    .setLngLat([it.lng, it.lat]).addTo(map);
+  // Fit small extents (a building, a park); big ones (a city, or a campus
+  // whose OSM polygon includes far-flung farmland) zoom out so far the site
+  // is lost — fly to the point instead.
+  const e = it.extent;
+  if (e && e[1][0] - e[0][0] < 0.05 && e[1][1] - e[0][1] < 0.05) {
+    map.fitBounds(e, { padding: 60, maxZoom: 17, maxDuration: 2500 });
+  } else if (e) {
+    map.flyTo({ center: [it.lng, it.lat], zoom: 14, maxDuration: 2500 });
+  } else {
+    map.flyTo({ center: [it.lng, it.lat], zoom: 16, maxDuration: 2500 });
+  }
+}
+
+// ---- geocoding --------------------------------------------------------------
+function photonItem(f) {
+  const p = f.properties || {};
+  const c = f.geometry.coordinates;
+  const street = [p.housenumber, p.street].filter(Boolean).join(" ");
+  const title = p.name || street || p.city || p.county || p.state || "(unnamed)";
+  const sub = [p.name ? street : "", p.city, p.state, p.country]
+    .filter(function (x) { return x && x !== title; }).join(", ");
+  const it = { kind: "point", lng: c[0], lat: c[1], title: title, sub: sub };
+  // Photon extent order: [minLon, maxLat, maxLon, minLat]
+  if (p.extent && p.extent.length === 4)
+    it.extent = [[p.extent[0], p.extent[3]], [p.extent[2], p.extent[1]]];
+  return it;
+}
+
+const photonCache = new Map();
+let inflight = null;
+function fetchPhoton(q) {
+  if (photonCache.has(q)) return Promise.resolve(photonCache.get(q));
+  if (inflight) inflight.abort();               // only the newest query matters
+  inflight = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const c = map.getCenter();                    // bias toward where you're looking
+  const url = PHOTON_URL + "?limit=6&lang=en&q=" + encodeURIComponent(q) +
+              "&lat=" + c.lat.toFixed(4) + "&lon=" + c.lng.toFixed(4);
+  return fetch(url, inflight ? { signal: inflight.signal } : {})
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function (gj) {
+      const list = (gj.features || []).map(photonItem);
+      photonCache.set(q, list);
+      return list;
+    });
+}
+
+function fetchNominatim(q) {
+  return fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" +
+               encodeURIComponent(q) +
+               (NOMINATIM_EMAIL ? "&email=" + encodeURIComponent(NOMINATIM_EMAIL) : ""))
     .then(function (r) { return r.json(); })
     .then(function (hits) {
-      if (!hits.length) { searchMsg.textContent = "no result"; return; }
-      searchMsg.textContent = "";
-      // Fly there; the user draws the bbox themselves (deliberate — the
-      // right framing is a judgment call, see the dialog's guidance notes).
-      // maxDuration matters: flyTo's auto duration scales with screen-space
-      // distance, so a cross-country hop at zoom 15 would animate for HOURS.
-      map.flyTo({ center: [+hits[0].lon, +hits[0].lat], zoom: 15,
-                  maxDuration: 2500 });
+      return hits.map(function (h) {
+        return { kind: "point", lat: +h.lat, lng: +h.lon,
+                 title: h.display_name, sub: "" };
+      });
+    });
+}
+
+let debounceTimer = null;
+function onInput() {
+  const q = search.value.trim();
+  searchMsg.textContent = "";
+  clearTimeout(debounceTimer);
+  if (q === chosenTitle) { closeSuggest(); return; }
+  const coords = parseCoords(q);
+  if (coords.length) { showItems(q, coords); return; }
+  if (q.length < SUGGEST_MIN_CHARS) { closeSuggest(); return; }
+  debounceTimer = setTimeout(function () {
+    fetchPhoton(q).then(function (list) {
+      if (search.value.trim() === q) showItems(q, list);   // still current?
+    }).catch(function () { /* aborted or offline: Enter still works */ });
+  }, SUGGEST_DEBOUNCE_MS);
+}
+
+// Enter / Go: take the highlighted suggestion; if the list isn't for this
+// query yet (typed fast), look it up now — Photon first, Nominatim fallback.
+function submit() {
+  const q = search.value.trim();
+  if (!q) return;
+  clearTimeout(debounceTimer);
+  if (itemsFor === q && items.length) { choose(items[selIdx]); return; }
+  const coords = parseCoords(q);
+  if (coords.length) { choose(coords[0]); return; }
+  searchMsg.textContent = "…";
+  fetchPhoton(q)
+    .catch(function () { return []; })
+    .then(function (list) { return list.length ? list : fetchNominatim(q); })
+    .then(function (list) {
+      if (!list.length) {
+        searchMsg.textContent = "no result — try lat, lng";
+        return;
+      }
+      choose(list[0]);
     })
     .catch(function () { searchMsg.textContent = "search failed"; });
 }
 
-document.getElementById("search-go").addEventListener("click", searchAddress);
+search.addEventListener("input", onInput);
 search.addEventListener("keydown", function (ev) {
-  if (ev.key === "Enter" || ev.keyCode === 13) searchAddress();
+  const k = ev.key || "";
+  if (k === "ArrowDown" || k === "ArrowUp") {
+    if (!items.length) return;
+    ev.preventDefault();
+    selIdx = (selIdx + (k === "ArrowDown" ? 1 : items.length - 1)) % items.length;
+    renderSuggest();
+  } else if (k === "Enter" || ev.keyCode === 13) {
+    ev.preventDefault(); submit();
+  } else if (k === "Escape") {
+    closeSuggest();
+  }
 });
+search.addEventListener("blur", function () { setTimeout(closeSuggest, 150); });
+search.addEventListener("focus", onInput);
+document.getElementById("search-go").addEventListener("click", submit);
+
+// Exposed for debugging from the devtools console.
+window.__parseCoords = parseCoords;
 </script>
 </body>
 </html>
