@@ -7,6 +7,7 @@ be tested headless with pytest (backend/tests/test_rhino_form.py) while
 the Eto file stays a thin skin. If you're adding dialog behavior, ask
 "does this need a widget?" — if not, it belongs in this file.
 """
+import json
 import math
 
 # Mirrors backend roads.CLASS_WIDTH_M (meters). Kept as an ordered list so
@@ -30,6 +31,29 @@ DEFAULT_RIVER_WIDTH_M = 5.0   # mirrors backend water.DEFAULT_RIVER_WIDTH_M
 # with pixel count. TUNE ME as more sites are timed.
 _MINUTES_BASE_TREES, _MINUTES_PER_KM2_TREES = 1.5, 6.0
 _MINUTES_BASE, _MINUTES_PER_KM2 = 1.0, 1.5
+
+
+def decode_map_state(raw):
+    """Parse the map page's getState() as returned by WebView.ExecuteScript.
+
+    The return value differs by platform. macOS hands back the JS string
+    as-is. Windows (Eto's WebView2 handler) gets it JSON-ENCODED from
+    WebView2 and only strips the outer quotes — the inner quotes stay
+    escaped: {\\"bbox\\": ...}. Parsing that as plain JSON failed on every
+    poll, silently, so the dialog never saw the user's box and generated
+    the default site instead. Returns the state dict, or None."""
+    if not raw:
+        return None
+    for text in (raw, '"%s"' % raw):    # as-is, then undo the escaping
+        try:
+            value = json.loads(text)
+            if isinstance(value, str):     # escaped form decodes to a str
+                value = json.loads(value)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return None
 
 
 def parse_interval(raw):

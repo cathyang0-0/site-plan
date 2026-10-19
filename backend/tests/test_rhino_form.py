@@ -130,3 +130,34 @@ class TestRoadClassDefaults:
     def test_river_default_mirrors_backend(self):
         from siteplan_backend.pipeline.water import DEFAULT_RIVER_WIDTH_M
         assert form.DEFAULT_RIVER_WIDTH_M == DEFAULT_RIVER_WIDTH_M
+
+
+class TestDecodeMapState:
+    """The map bridge must parse ExecuteScript's result on BOTH platforms.
+    Regression: on Windows every poll failed to parse, so the dialog
+    silently generated the default site instead of the user's box."""
+    STATE = {"bbox": {"west": -122.42, "south": 37.77, "east": -122.41,
+                      "north": 37.78}, "area_km2": 0.98, "seq": 3}
+
+    def _page_string(self):
+        import json
+        return json.dumps(self.STATE)          # what getState() returns
+
+    def test_macos_raw_string(self):
+        assert form.decode_map_state(self._page_string()) == self.STATE
+
+    def test_windows_webview2_escaped(self):
+        import json
+        # WebView2 JSON-encodes the result; Eto's Decode() then only strips
+        # the outer quotes (src/Eto.Wpf/Forms/Controls/WebView2Handler.cs).
+        raw = json.dumps(self._page_string())[1:-1]
+        assert raw.startswith('{\\"bbox')
+        assert form.decode_map_state(raw) == self.STATE
+
+    def test_double_encoded_with_quotes(self):
+        import json
+        assert form.decode_map_state(json.dumps(self._page_string())) == self.STATE
+
+    @pytest.mark.parametrize("raw", [None, "", "null", "''", "not json", "[1,2]"])
+    def test_garbage_is_none(self, raw):
+        assert form.decode_map_state(raw) is None

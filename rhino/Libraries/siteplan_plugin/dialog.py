@@ -114,6 +114,8 @@ class SitePlanDialog(forms.Dialog[bool]):
         self._timer.Interval = 0.5
         self._timer.Elapsed += self._poll_map
         self._timer.Start()
+        if self._bbox:
+            self._show_site()
 
     # ------------------------------------------------------------- options UI
     def _build_options_page(self):
@@ -416,9 +418,10 @@ class SitePlanDialog(forms.Dialog[bool]):
         try:
             raw = self._webview.ExecuteScript(
                 "return window.getState ? window.getState() : ''")
-            state = json.loads(raw) if raw else None
         except Exception:
             return    # page still loading, or a transient bridge hiccup
+        # decode_map_state handles the Windows (WebView2) escaping — see it.
+        state = form.decode_map_state(raw)
         if not state or not state.get("bbox"):
             return
         if state.get("seq") == self._map_seq:
@@ -427,10 +430,15 @@ class SitePlanDialog(forms.Dialog[bool]):
         self._bbox = state["bbox"]
         self.last_bbox = self._bbox
         self._area_km2 = state.get("area_km2") or form.bbox_area_km2(self._bbox)
+        self._show_site()
+        self._refresh_estimate()
+
+    def _show_site(self):
+        """Readout of the bbox Generate will use — shown from the start (the
+        remembered box), so it's never a surprise which site runs."""
         b = self._bbox
         self._readout.Text = "Site: %.4f, %.4f  →  %.4f, %.4f" % (
             b["west"], b["south"], b["east"], b["north"])
-        self._refresh_estimate()
 
     def _refresh_estimate(self):
         if not self._bbox:
