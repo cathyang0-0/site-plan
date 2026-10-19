@@ -121,8 +121,12 @@ def _ensure_backend():
     env = {k: v for k, v in os.environ.items()
            if not k.upper().startswith("PYTHON")}
     with open(log_path, "ab") as log:
+        # cwd: Rhino's own is "/" (macOS) or its install dir (Windows),
+        # neither writable — anything the backend writes relative to the
+        # CWD would fail. The user's home always is.
         proc = subprocess.Popen([exe], stdout=log, stderr=log,
-                                stdin=subprocess.DEVNULL, env=env, **popen_kw)
+                                stdin=subprocess.DEVNULL, env=env,
+                                cwd=os.path.expanduser("~"), **popen_kw)
     deadline = time.time() + 120
     while time.time() < deadline:
         rs.Prompt("SitePlan: starting the local backend (first start can "

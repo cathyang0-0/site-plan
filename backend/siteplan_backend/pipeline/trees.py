@@ -7,6 +7,7 @@ Output: list of dicts {"x_px", "y_px", "radius_px", "radius_m"}
 DeepForest docs: https://deepforest.readthedocs.io
 """
 import math
+import os
 import random
 
 import numpy as np
@@ -73,7 +74,15 @@ def detect_trees(
     except ImportError:
         raise ImportError("deepforest not installed. Run: pip install deepforest")
 
-    model = deepforest_main.deepforest()
+    # log_root defaults to ./lightning_logs — relative to the CWD, which for
+    # a backend auto-started by Rhino is "/" (macOS, read-only) or Rhino's
+    # install dir (Windows): "OSError: [Errno 30] Read-only file system:
+    # '//lightning_logs'". Inference never needs those logs; park them in
+    # the temp dir.
+    import tempfile
+    model = deepforest_main.deepforest(config_args={
+        "log_root": os.path.join(tempfile.gettempdir(),
+                                 "siteplan-lightning_logs")})
     # deepforest 2.x: pretrained weights come from HuggingFace (downloads and
     # caches on first run). Replaces the removed 1.x use_release().
     model.load_model("weecology/deepforest-tree")
